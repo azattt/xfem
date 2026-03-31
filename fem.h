@@ -26,7 +26,7 @@ struct Triangle1HeavisideSign
 struct HeavisideEnrichedQuad{
     // // global coords of linear quad in standard order (counter-clockwise)
     // // left-bottom right-bottom right-top left-top
-    std::array<unsigned int, 4> vertex_indices;
+    std::array<unsigned int, 4> node_ids;
     // // local xi, eta of crack with element intersection points (before isoparametric map)
     std::array<glm::vec2, 2> intersection_points_local;
     // // convex non-degenerate quad triangulation consists of four triangles

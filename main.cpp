@@ -16,6 +16,7 @@
 #include <Eigen/Dense>
 
 #include "fem.h"
+#include "gui.h"
 
 #include "camera.h"
 #include "shader.h"
@@ -313,14 +314,36 @@ inline bool segmentIntersect(glm::vec2 a, glm::vec2 b, glm::vec2 c, glm::vec2 d,
 
     return t >= 0.f && t <= 1.f && u >= 0.f && u <= 1.f;
 }
-
+void checkGLSLVersion() {
+    const GLubyte* renderer = glGetString(GL_RENDERER);
+    const GLubyte* vendor = glGetString(GL_VENDOR);
+    const GLubyte* version = glGetString(GL_VERSION);
+    const GLubyte* glslVersion = glGetString(GL_SHADING_LANGUAGE_VERSION);
+    
+    std::cout << "Renderer: " << renderer << std::endl;
+    std::cout << "Vendor: " << vendor << std::endl;
+    std::cout << "OpenGL Version: " << version << std::endl;
+    std::cout << "GLSL Version: " << glslVersion << std::endl;
+    
+    // Get max supported versions
+    GLint major, minor;
+    glGetIntegerv(GL_MAJOR_VERSION, &major);
+    glGetIntegerv(GL_MINOR_VERSION, &minor);
+    std::cout << "OpenGL Context Version: " << major << "." << minor << std::endl;
+    GLint profile;
+glGetIntegerv(GL_CONTEXT_PROFILE_MASK, &profile);
+if (profile & GL_CONTEXT_CORE_PROFILE_BIT)
+    std::cout << "Core profile" << std::endl;
+else if (profile & GL_CONTEXT_COMPATIBILITY_PROFILE_BIT)
+    std::cout << "Compatibility profile" << std::endl;
+}
 int main()
 {
     std::vector<Circle> circles;
     std::vector<Rectangle> rectangles;
     std::vector<Quad> quads;
     float w = 1, h = 1;
-    unsigned int wn = 40, hn = 40;
+    unsigned int wn = 5, hn = 5;
     float wh = w / (wn - 1), hh = h / (hn - 1);
 
     std::vector<glm::vec2> vertices;
@@ -344,9 +367,10 @@ int main()
     if (!glfwInit())
         return -1;
 
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);   // use 4.6
+glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
     /* Create a windowed mode window and its OpenGL context */
     window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Hello World", NULL, NULL);
@@ -368,7 +392,31 @@ int main()
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
     }
+    checkGLSLVersion();
+    std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
 
+// List all shader files
+std::vector<std::string> shaderFiles = {
+    "shaders/xfem.vert", "shaders/xfem.frag",
+    "shaders/pchain.vert", "shaders/pchain.frag",
+    "shaders/circle.vert", "shaders/circle.frag",
+    "shaders/rect.vert", "shaders/rect.frag",
+    "shaders/quad.vert", "shaders/quad.frag"
+};
+
+// for (const auto& file : shaderFiles) {
+//     if (std::filesystem::exists(file)) {
+//         std::cout << "✓ Found: " << file << std::endl;
+//         // Print first line to verify content
+//         std::ifstream test(file);
+//         std::string firstLine;
+//         std::getline(test, firstLine);
+//         std::cout << "  First line: " << firstLine << std::endl;
+//     } else {
+//         std::cout << "✗ MISSING: " << file << std::endl;
+//     }
+// }
+//     return 0;
     // GLuint VBO, EBO, VAO;
     // glGenBuffers(1, &VBO);
     // glGenBuffers(1, &EBO);
@@ -419,18 +467,30 @@ int main()
         //     0.1f*glm::sin(2*glm::pi<float>()/5*i) + 0.5f}); crack_indices.push_back(Line{static_cast<unsigned
         //     int>(crack_vertices.size() - 2), static_cast<unsigned int>(crack_vertices.size() - 1)});
         // }
-    crack_vertices.push_back(glm::vec2{0.1f, 0.5f});
-    for (int i = 2; i < 10; i++)
-    {
-        // crack_vertices.push_back(glm::vec2{(float)(rand() % 100) / 100, (float)(rand() % 100) / 100});
-        // crack_vertices.push_back(glm::vec2{(float)i / 10, glm::sin((float)2 * i / 5) / 4 + 0.5f});
-        // crack_vertices.push_back(glm::vec2{(float)i / 10, (float)(rand() % 100) / 1000 + 0.5f});
-        crack_vertices.push_back(glm::vec2{(float)i / 10, 0.5f});
-        // crack_vertices.push_back(glm::vec2{glm::cos((float)2 * i / 5) / 4 + 0.5f, glm::sin((float)2 * i / 5) / 4 +
-        // 0.5f});
-        crack_indices.push_back(Line{static_cast<unsigned int>(crack_vertices.size() - 2),
-                                     static_cast<unsigned int>(crack_vertices.size() - 1)});
-    }
+    // crack_vertices.push_back(glm::vec2{0.1f, 0.5f});
+    // for (int i = 2; i < 10; i++)
+    // {
+    //     // crack_vertices.push_back(glm::vec2{(float)(rand() % 100) / 100, (float)(rand() % 100) / 100});
+    //     // crack_vertices.push_back(glm::vec2{(float)i / 10, glm::sin((float)2 * i / 5) / 4 + 0.5f});
+    //     // crack_vertices.push_back(glm::vec2{(float)i / 10, (float)(rand() % 100) / 1000 + 0.5f});
+    //     crack_vertices.push_back(glm::vec2{(float)i / 10, 0.5f});
+    //     // crack_vertices.push_back(glm::vec2{glm::cos((float)2 * i / 5) / 4 + 0.5f, glm::sin((float)2 * i / 5) / 4 +
+    //     // 0.5f});
+    //     crack_indices.push_back(Line{static_cast<unsigned int>(crack_vertices.size() - 2),
+    //                                  static_cast<unsigned int>(crack_vertices.size() - 1)});
+    // }
+
+    // crack_vertices.push_back(glm::vec2{0.0f, 0.5f});
+    // crack_vertices.push_back(glm::vec2{0.5f, 0.5f});
+    // crack_indices.push_back(Line{0, 1});
+
+    // through node
+    // crack_vertices.push_back(glm::vec2{0.6f, 0.2f});
+    // crack_vertices.push_back(glm::vec2{0.9f, 0.3f});
+
+    crack_vertices.push_back(glm::vec2{0.6f, 0.2f});
+    crack_vertices.push_back(glm::vec2{0.9f, 0.4f});
+    crack_indices.push_back(Line{0, 1});
 
     line_segments.reserve(crack_indices.size());
     glm::vec2 segment;
@@ -439,9 +499,6 @@ int main()
         segment = crack_vertices[line.v1] - crack_vertices[line.v0];
         line_segments.push_back(LineSegment{crack_vertices[line.v0], segment, glm::dot(segment, segment)});
     }
-    // crack_vertices.push_back(glm::vec2{0.0f, 0.5f});
-    // crack_vertices.push_back(glm::vec2{0.5f, 0.5f});
-    // crack_indices.push_back(Line{0, 1});
 
     glBindBuffer(GL_ARRAY_BUFFER, lineVBO);
     glBufferData(GL_ARRAY_BUFFER, crack_vertices.size() * sizeof(glm::vec2), crack_vertices.data(), GL_STATIC_DRAW);
@@ -463,619 +520,628 @@ int main()
     float line_segment_min_dist_t_par;
     glm::vec2 closest_point;
 
-
-    std::vector<bool> heaviside_enriched_nodes(vertices.size(), false);
-
     std::vector<LevelSetSign> vertices_level_set_signs;
     std::vector<double> level_set_1_signed_dist;
     std::vector<double> level_set_2_signed_dist;
     std::vector<double> level_set_3_signed_dist;
     std::vector<int> level_set_tips;
-
+    
     vertices_level_set_signs.resize(total_vertices);
     level_set_1_signed_dist.resize(total_vertices);
     level_set_2_signed_dist.resize(total_vertices);
     level_set_3_signed_dist.resize(total_vertices);
     level_set_tips.resize(total_vertices);
-
+    
     float ab, ac, bc;
     int sign, tip;
     unsigned int index;
     float dist2;
-
-    LineSegment last_segment = line_segments[line_segments.size() - 1];
-    glm::vec2 last_vertex = last_segment.v0 + last_segment.dir;
-    LineSegment first_segment = line_segments[0];
-    glm::vec2 first_vertex = first_segment.v0;
-
-    std::vector<unsigned int> enriched_rects;
-    std::vector<EnrichedQuad> enriched_elements;
+    unsigned int idx;
+    EnrichmentType enrichment_type = NoEnrichment;
     std::vector<HeavisideEnrichedQuad> heaviside_enriched_quads;
-    std::cout << "Setting level set values for nodes" << std::endl;
-    for (size_t i = 0; i < total_vertices; i++)
-    {
-        // break;
-        const glm::vec2 &vertex = vertices[i];
-        line_segment_min_dist2 = std::numeric_limits<float>::max();
-        for (size_t j = 0; j < line_segments.size(); j++)
-        {
-            const LineSegment &line_segment = line_segments[j];
-            v0_to_vertex = vertex - line_segment.v0;
-            if (line_segment.l_squared < 1e-12)
-            {
-                std::cout << "Degenerate segment" << std::endl;
-                continue;
-            }
-            t = glm::dot(v0_to_vertex, line_segment.dir) / line_segment.l_squared;
-            closest_point = line_segment.v0 + glm::clamp(t, 0.0f, 1.0f) * line_segment.dir;
-            dist = vertex - closest_point;
-            dist2 = glm::dot(dist, dist);
-            if (dist2 < line_segment_min_dist2)
-            {
-                line_segment_min_dist2 = dist2;
-                line_segment_min_dist_index = j;
-                line_segment_min_dist_t_par = t;
-            }
-        }
-        const LineSegment &closest_line_segment = line_segments[line_segment_min_dist_index];
-        v0_to_vertex = vertex - (closest_line_segment.v0 +
-                                 glm::clamp(line_segment_min_dist_t_par, 0.0f, 1.0f) * closest_line_segment.dir);
-        signed_area = closest_line_segment.dir.x * v0_to_vertex.y - v0_to_vertex.x * closest_line_segment.dir.y;
+    std::vector<HeavisideEnrichedQuad> tip_enriched_quads;
+    std::vector<bool> heaviside_enriched_nodes(vertices.size(), false);
+    if (!line_segments.empty()){
+        LineSegment last_segment = line_segments[line_segments.size() - 1];
+        glm::vec2 last_vertex = last_segment.v0 + last_segment.dir;
+        LineSegment first_segment = line_segments[0];
+        glm::vec2 first_vertex = first_segment.v0;
 
-        sign = 0;
-        tip = 0;
-        index = 0xdeadbeef;
-        t = line_segment_min_dist_t_par;
-        if (t > 1.0f)
+        std::cout << "Setting level set values for nodes" << std::endl;
+        for (size_t i = 0; i < total_vertices; i++)
         {
-
-            if (line_segment_min_dist_index == line_segments.size() - 1)
+            // break;
+            const glm::vec2 &vertex = vertices[i];
+            line_segment_min_dist2 = std::numeric_limits<float>::max();
+            for (size_t j = 0; j < line_segments.size(); j++)
             {
-                index = line_segments.size() - 1;
-                sign = signed_area > 0.0f ? 1 : (signed_area < 0.0f ? -1 : 0);
-                tip = 1;
+                const LineSegment &line_segment = line_segments[j];
+                v0_to_vertex = vertex - line_segment.v0;
+                if (line_segment.l_squared < 1e-12)
+                {
+                    std::cout << "Degenerate segment" << std::endl;
+                    continue;
+                }
+                t = glm::dot(v0_to_vertex, line_segment.dir) / line_segment.l_squared;
+                closest_point = line_segment.v0 + glm::clamp(t, 0.0f, 1.0f) * line_segment.dir;
+                dist = vertex - closest_point;
+                dist2 = glm::dot(dist, dist);
+                if (dist2 < line_segment_min_dist2)
+                {
+                    line_segment_min_dist2 = dist2;
+                    line_segment_min_dist_index = j;
+                    line_segment_min_dist_t_par = t;
+                }
+            }
+            const LineSegment &closest_line_segment = line_segments[line_segment_min_dist_index];
+            v0_to_vertex = vertex - (closest_line_segment.v0 +
+                                    glm::clamp(line_segment_min_dist_t_par, 0.0f, 1.0f) * closest_line_segment.dir);
+            signed_area = closest_line_segment.dir.x * v0_to_vertex.y - v0_to_vertex.x * closest_line_segment.dir.y;
+
+            sign = 0;
+            tip = 0;
+            index = 0xdeadbeef;
+            t = line_segment_min_dist_t_par;
+            if (t > 1.0f)
+            {
+
+                if (line_segment_min_dist_index == line_segments.size() - 1)
+                {
+                    index = line_segments.size() - 1;
+                    sign = signed_area > 0.0f ? 1 : (signed_area < 0.0f ? -1 : 0);
+                    tip = 1;
+                }
+                else
+                {
+                    index = line_segment_min_dist_index;
+                    const glm::vec2 &a = line_segments[line_segment_min_dist_index].dir;
+                    const glm::vec2 &b = line_segments[line_segment_min_dist_index + 1].dir;
+
+                    ab = a.x * b.y - a.y * b.x;
+                    ac = a.x * v0_to_vertex.y - a.y * v0_to_vertex.x;
+                    bc = b.x * v0_to_vertex.y - b.y * v0_to_vertex.x;
+                    sign = ab < 0 ? (ac > 0 || bc > 0 ? 1 : -1) : (ac > 0 && bc > 0 ? 1 : -1);
+                }
+            }
+            else if (t < 0.0f)
+            {
+                if (line_segment_min_dist_index == 0)
+                {
+                    index = line_segment_min_dist_index;
+                    sign = signed_area > 0.0f ? 1 : (signed_area < 0.0f ? -1 : 0);
+                    tip = -1;
+                }
+                else
+                {
+                    index = line_segment_min_dist_index - 1;
+                    const glm::vec2 &a = line_segments[line_segment_min_dist_index - 1].dir;
+                    const glm::vec2 &b = line_segments[line_segment_min_dist_index].dir;
+
+                    ab = a.x * b.y - a.y * b.x;
+                    ac = a.x * v0_to_vertex.y - a.y * v0_to_vertex.x;
+                    bc = b.x * v0_to_vertex.y - b.y * v0_to_vertex.x;
+                    sign = ab < 0 ? (ac > 0 || bc > 0 ? 1 : -1) : (ac > 0 && bc > 0 ? 1 : -1);
+                }
             }
             else
             {
                 index = line_segment_min_dist_index;
-                const glm::vec2 &a = line_segments[line_segment_min_dist_index].dir;
-                const glm::vec2 &b = line_segments[line_segment_min_dist_index + 1].dir;
-
-                ab = a.x * b.y - a.y * b.x;
-                ac = a.x * v0_to_vertex.y - a.y * v0_to_vertex.x;
-                bc = b.x * v0_to_vertex.y - b.y * v0_to_vertex.x;
-                sign = ab < 0 ? (ac > 0 || bc > 0 ? 1 : -1) : (ac > 0 && bc > 0 ? 1 : -1);
-            }
-        }
-        else if (t < 0.0f)
-        {
-            if (line_segment_min_dist_index == 0)
-            {
-                index = line_segment_min_dist_index;
                 sign = signed_area > 0.0f ? 1 : (signed_area < 0.0f ? -1 : 0);
-                tip = -1;
             }
-            else
-            {
-                index = line_segment_min_dist_index - 1;
-                const glm::vec2 &a = line_segments[line_segment_min_dist_index - 1].dir;
-                const glm::vec2 &b = line_segments[line_segment_min_dist_index].dir;
+            vertices_level_set_signs[i].sign = sign;
+            vertices_level_set_signs[i].index = index;
+            level_set_1_signed_dist[i] = sign * glm::sqrt(line_segment_min_dist2);
+            level_set_2_signed_dist[i] =
+                glm::dot(vertex - last_vertex, last_segment.dir) / glm::sqrt(last_segment.l_squared);
+            level_set_3_signed_dist[i] =
+                -glm::dot(vertex - first_vertex, first_segment.dir) / glm::sqrt(last_segment.l_squared);
+            // std::cout << level_set_2_signed_dist[i] << "\n";
+            // rectangles.push_back(Rectangle{glm::vec4(vertex, vertex-10.0f/SCR_WIDTH),
+            // RainbowColormap::getColorRGBA(glm::sqrt(line_segment_min_dist2+level_set_2_signed_dist[i]*level_set_2_signed_dist[i]))});
+            // rectangles.push_back(Rectangle{glm::vec4(vertex, vertex-10.0f/SCR_WIDTH),
+            // RainbowColormap::getColorRGBA(glm::abs(glm::atan(level_set_1_signed_dist[i],level_set_2_signed_dist[i]))/2)});
+            // rectangles.push_back(Rectangle{glm::vec4(vertex, vertex-10.0f/SCR_WIDTH),
+            // RainbowColormap::getColorRGBA(glm::atan(level_set_1_signed_dist[i],level_set_2_signed_dist[i])/1.57)});
+            // rectangles.push_back(Rectangle{glm::vec4(vertex, vertex+5.0f/SCR_WIDTH),
+            // RainbowColormap::getColorRGBA(std::abs(level_set_1_signed_dist[i]))}); if (sign > 0)
+            // {
+            //     circles.push_back(Circle{glm::vec3(vertex, 2.0f/SCR_WIDTH), glm::vec4(0.0f, 1.0f, 0.0f, 1.0f)});
+            // }
+            // else if (sign < 0)w
+            // {
+            //     circles.push_back(Circle{glm::vec3(vertex, 2.0f/SCR_WIDTH), glm::vec4(0.0f, 0.0f, 1.0f, 1.0f)});
+            // }
+            // else
+            // {
+            //     std::cout << "On line segment or on its continuation if t > 1" << std::endl;
+            // }
 
-                ab = a.x * b.y - a.y * b.x;
-                ac = a.x * v0_to_vertex.y - a.y * v0_to_vertex.x;
-                bc = b.x * v0_to_vertex.y - b.y * v0_to_vertex.x;
-                sign = ab < 0 ? (ac > 0 || bc > 0 ? 1 : -1) : (ac > 0 && bc > 0 ? 1 : -1);
-            }
+            vertices_level_set_signs[i].tip = (line_segment_min_dist_index == line_segments.size() - 1 && t > 1.0f)
+                                                ? 1
+                                                : ((line_segment_min_dist_index == 0 && t < 0.0f) ? -1 : 0);
         }
-        else
+        std::cout << "searching for enriched elements" << std::endl;
+        for (unsigned int j = 0; j < hn - 1; j++)
         {
-            index = line_segment_min_dist_index;
-            sign = signed_area > 0.0f ? 1 : (signed_area < 0.0f ? -1 : 0);
-        }
-        vertices_level_set_signs[i].sign = sign;
-        vertices_level_set_signs[i].index = index;
-        level_set_1_signed_dist[i] = sign * glm::sqrt(line_segment_min_dist2);
-        level_set_2_signed_dist[i] =
-            glm::dot(vertex - last_vertex, last_segment.dir) / glm::sqrt(last_segment.l_squared);
-        level_set_3_signed_dist[i] =
-            -glm::dot(vertex - first_vertex, first_segment.dir) / glm::sqrt(last_segment.l_squared);
-        // std::cout << level_set_2_signed_dist[i] << "\n";
-        // rectangles.push_back(Rectangle{glm::vec4(vertex, vertex-10.0f/SCR_WIDTH),
-        // RainbowColormap::getColorRGBA(glm::sqrt(line_segment_min_dist2+level_set_2_signed_dist[i]*level_set_2_signed_dist[i]))});
-        // rectangles.push_back(Rectangle{glm::vec4(vertex, vertex-10.0f/SCR_WIDTH),
-        // RainbowColormap::getColorRGBA(glm::abs(glm::atan(level_set_1_signed_dist[i],level_set_2_signed_dist[i]))/2)});
-        // rectangles.push_back(Rectangle{glm::vec4(vertex, vertex-10.0f/SCR_WIDTH),
-        // RainbowColormap::getColorRGBA(glm::atan(level_set_1_signed_dist[i],level_set_2_signed_dist[i])/1.57)});
-        // rectangles.push_back(Rectangle{glm::vec4(vertex, vertex+5.0f/SCR_WIDTH),
-        // RainbowColormap::getColorRGBA(std::abs(level_set_1_signed_dist[i]))}); if (sign > 0)
-        // {
-        //     circles.push_back(Circle{glm::vec3(vertex, 2.0f/SCR_WIDTH), glm::vec4(0.0f, 1.0f, 0.0f, 1.0f)});
-        // }
-        // else if (sign < 0)w
-        // {
-        //     circles.push_back(Circle{glm::vec3(vertex, 2.0f/SCR_WIDTH), glm::vec4(0.0f, 0.0f, 1.0f, 1.0f)});
-        // }
-        // else
-        // {
-        //     std::cout << "On line segment or on its continuation if t > 1" << std::endl;
-        // }
+            for (unsigned int i = 0; i < wn - 1; i++)
+            {
+                enrichment_type = NoEnrichment;
+                // if (i == 1 and j == 1) continue;
+                idx = j * wn + i;
+                
+                // if (idx != 53)
+                //     continue;
+                if ((vertices_level_set_signs[idx].sign == vertices_level_set_signs[idx + 1].sign &&
+                    vertices_level_set_signs[idx + 1].sign == vertices_level_set_signs[idx + wn].sign &&
+                    vertices_level_set_signs[idx + wn].sign == vertices_level_set_signs[idx + wn + 1].sign))
+                {
 
-        vertices_level_set_signs[i].tip = (line_segment_min_dist_index == line_segments.size() - 1 && t > 1.0f)
-                                              ? 1
-                                              : ((line_segment_min_dist_index == 0 && t < 0.0f) ? -1 : 0);
+                    if (vertices_level_set_signs[idx].index != vertices_level_set_signs[idx + 1].index)
+                    {
+                        if (idx + wn < vertices.size() && idx + 1 + wn < vertices.size() &&
+                            inQuad(vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
+                                crack_vertices[vertices_level_set_signs[idx + 1].index]))
+                        {
+                            enrichment_type = Heaviside;
+                        }
+                        else if (idx - wn < 0 && idx + 1 - wn < 0 &&
+                                inQuad(vertices[idx - wn], vertices[idx - wn + 1], vertices[idx + 1], vertices[idx],
+                                        crack_vertices[vertices_level_set_signs[idx + 1].index]))
+                        {
+                        
+                            enrichment_type = Heaviside;
+                        }
+                    }
+                    else if (vertices_level_set_signs[idx + 1].index != vertices_level_set_signs[idx + wn + 1].index)
+                    {
+                        // continue;
+                        throw std::runtime_error("NotImplemented");
+                    }
+                    else if (vertices_level_set_signs[idx + wn + 1].index != vertices_level_set_signs[idx + wn].index)
+                    {
+                        continue;
+                        throw std::runtime_error("NotImplemented");
+                        // if (idx + wn < vertices.size() && idx + 1 + wn < vertices.size() &&
+                        //     !inQuad(vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
+                        //             crack_vertices[std::min(vertices_level_set_signs[idx + wn + 1].index,
+                        //                                    vertices_level_set_signs[idx + wn].index)]))
+                        // {
+                        //     continue;
+                        // }
+                        // enrichment_type = 1;
+                    }
+                    else if (vertices_level_set_signs[idx].index != vertices_level_set_signs[idx + wn].index)
+                    {
+                        // continue;
+                        throw std::runtime_error("NotImplemented");
+                        // if (idx + wn < vertices.size() && idx + 1 + wn < vertices.size() &&
+                        //     !inQuad(vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
+                        //             crack_vertices[std::min(vertices_level_set_signs[idx].index,
+                        //                                    vertices_level_set_signs[idx + wn].index)]))
+                        // {
+                        //     continue;
+                        // }
+                        // enrichment_type = 1;
+                    }
+                }
+                else if ((vertices_level_set_signs[idx].tip == -1 && vertices_level_set_signs[idx + 1].tip == -1 &&
+                        vertices_level_set_signs[idx + wn].tip == -1 &&
+                        vertices_level_set_signs[idx + wn + 1].tip == -1) ||
+                        (vertices_level_set_signs[idx].tip == 1 && vertices_level_set_signs[idx + 1].tip == 1 &&
+                        vertices_level_set_signs[idx + wn].tip == 1 && vertices_level_set_signs[idx + wn + 1].tip == 1))
+                {
+                    // no enrichment
+                }
+                else
+                {
+                    if ((vertices_level_set_signs[idx].tip == -1) + (vertices_level_set_signs[idx + 1].tip == -1) +
+                            (vertices_level_set_signs[idx + wn].tip == -1) +
+                            (vertices_level_set_signs[idx + wn + 1].tip == -1) >=
+                        2)
+                    {
+                        if (inQuad(vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
+                                    first_vertex))
+                        {
+                            int intersection_edge = -1;
+                            glm::vec2 intersection_point;
+                            if (level_set_1_signed_dist[idx] * level_set_1_signed_dist[idx + 1] < 0 &&
+                                vertices_level_set_signs[idx].tip == 0 && vertices_level_set_signs[idx + 1].tip == 0)
+                            {
+                                intersection_edge = 0;
+                                intersection_point = interpolate(vertices[idx], vertices[idx + 1], level_set_1_signed_dist[idx],
+                                                                level_set_1_signed_dist[idx + 1]);
+                            }
+                            if (level_set_1_signed_dist[idx + 1] * level_set_1_signed_dist[idx + wn + 1] < 0 &&
+                                vertices_level_set_signs[idx + 1].tip == 0 && vertices_level_set_signs[idx + wn + 1].tip == 0)
+                            {
+                                if (intersection_edge != -1)
+                                {
+                                    throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
+                                }
+                                intersection_edge = 1;
+                                intersection_point =
+                                    interpolate(vertices[idx + 1], vertices[idx + wn + 1], level_set_1_signed_dist[idx + 1],
+                                                level_set_1_signed_dist[idx + wn + 1]);
+                            }
+                            if (level_set_1_signed_dist[idx + wn + 1] * level_set_1_signed_dist[idx + wn] < 0
+                                )
+                            {
+                                // at own risk: deleted check for  && vertices_level_set_signs[idx + wn + 1].tip == 0 && vertices_level_set_signs[idx + wn].tip == 0
+                                if (intersection_edge != -1)
+                                {
+                                    throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
+                                }
+                                intersection_edge = 2;
+                                intersection_point =
+                                    interpolate(vertices[idx + wn + 1], vertices[idx + wn],
+                                                level_set_1_signed_dist[idx + wn + 1], level_set_1_signed_dist[idx + wn]);
+                            }
+                            if (level_set_1_signed_dist[idx + wn] * level_set_1_signed_dist[idx] < 0 &&
+                                vertices_level_set_signs[idx + wn].tip == 0 && vertices_level_set_signs[idx].tip == 0)
+                            {
+                                if (intersection_edge != -1)
+                                {
+                                    throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
+                                }
+                                intersection_edge = 3;
+                                intersection_point =
+                                    interpolate(vertices[idx + wn], vertices[idx], level_set_1_signed_dist[idx + wn],
+                                                level_set_1_signed_dist[idx]);
+                            }
+                            if (intersection_edge == -1)
+                            {
+                                continue;
+                                throw std::runtime_error("No intersection edge found for tip enrichment");
+                            }
+                            std::array<unsigned int, 4> indexes = {idx, idx + 1, idx + wn + 1, idx + wn};
+                            std::vector<Triangle1> triangulation;
+                            triangulation.push_back(
+                                Triangle1{first_vertex, vertices[indexes[intersection_edge]], intersection_point});
+                            triangulation.push_back(Triangle1{first_vertex, intersection_point,
+                                                            vertices[indexes[positive_mod(intersection_edge + 1, 4)]]});
+                            for (unsigned int i = 0; i < 3; i++)
+                            {
+                                triangulation.push_back(
+                                    Triangle1{first_vertex, vertices[indexes[positive_mod(intersection_edge + i + 1, 4)]],
+                                            vertices[indexes[positive_mod(intersection_edge + i + 2, 4)]]});
+                            }
+                            // enriched_quad.triangulation = std::move(triangulation);
+                            enrichment_type = Tip;
+                        }
+                    }
+                    if ((vertices_level_set_signs[idx].tip == 1) + (vertices_level_set_signs[idx + 1].tip == 1) +
+                            (vertices_level_set_signs[idx + wn].tip == 1) +
+                            (vertices_level_set_signs[idx + wn + 1].tip == 1) >=
+                        2)
+                    {
+                        if (inQuad(vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
+                                    last_vertex))
+                        {
+                            if (enrichment_type == Tip)
+                                throw std::runtime_error("NotImplemented: two tips in one element");
+
+                            int intersection_edge = -1;
+                            glm::vec2 intersection_point;
+                            if (level_set_1_signed_dist[idx] * level_set_1_signed_dist[idx + 1] < 0 &&
+                                vertices_level_set_signs[idx].tip == 0 && vertices_level_set_signs[idx + 1].tip == 0)
+                            {
+                                intersection_edge = 0;
+                                intersection_point = interpolate(vertices[idx], vertices[idx + 1], level_set_1_signed_dist[idx],
+                                                                level_set_1_signed_dist[idx + 1]);
+                            }
+                            if (level_set_1_signed_dist[idx + 1] * level_set_1_signed_dist[idx + wn + 1] < 0 &&
+                                vertices_level_set_signs[idx + 1].tip == 0 && vertices_level_set_signs[idx + wn + 1].tip == 0)
+                            {
+                                if (intersection_edge != -1)
+                                {
+                                    throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
+                                }
+                                intersection_edge = 1;
+                                intersection_point =
+                                    interpolate(vertices[idx + 1], vertices[idx + wn + 1], level_set_1_signed_dist[idx + 1],
+                                                level_set_1_signed_dist[idx + wn + 1]);
+                            }
+                            if (level_set_1_signed_dist[idx + wn + 1] * level_set_1_signed_dist[idx + wn] < 0 &&
+                                vertices_level_set_signs[idx + wn + 1].tip == 0 && vertices_level_set_signs[idx + wn].tip == 0)
+                            {
+                                if (intersection_edge != -1)
+                                {
+                                    throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
+                                }
+                                intersection_edge = 2;
+                                intersection_point =
+                                    interpolate(vertices[idx + wn + 1], vertices[idx + wn],
+                                                level_set_1_signed_dist[idx + wn + 1], level_set_1_signed_dist[idx + wn]);
+                            }
+                            if (level_set_1_signed_dist[idx + wn] * level_set_1_signed_dist[idx] < 0 &&
+                                vertices_level_set_signs[idx + wn].tip == 0 && vertices_level_set_signs[idx].tip == 0)
+                            {
+                                if (intersection_edge != -1)
+                                {
+                                    throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
+                                }
+                                intersection_edge = 3;
+                                intersection_point =
+                                    interpolate(vertices[idx + wn], vertices[idx], level_set_1_signed_dist[idx + wn],
+                                                level_set_1_signed_dist[idx]);
+                            }
+                            if (intersection_edge == -1)
+                            {
+                                continue;
+                                throw std::runtime_error("No intersection edge found for tip enrichment");
+                            }
+                            std::array<unsigned int, 4> indexes = {idx, idx + 1, idx + wn + 1, idx + wn};
+
+                            std::vector<Triangle1> triangulation;
+                            triangulation.push_back(
+                                Triangle1{last_vertex, vertices[indexes[intersection_edge]], intersection_point});
+                            triangulation.push_back(Triangle1{last_vertex, intersection_point,
+                                                            vertices[indexes[positive_mod(intersection_edge + 1, 4)]]});
+                            for (unsigned int i = 0; i < 3; i++)
+                            {
+                                triangulation.push_back(
+                                    Triangle1{last_vertex, vertices[indexes[positive_mod(intersection_edge + i + 1, 4)]],
+                                            vertices[indexes[positive_mod(intersection_edge + i + 2, 4)]]});
+                            }
+                            // enriched_quad.triangulation = std::move(triangulation);
+                            enrichment_type = Tip;
+                        } 
+                    }
+                    if (enrichment_type != Tip)
+                    {
+                        enrichment_type = Heaviside;
+                        std::array<unsigned int, 4> indexes = {idx, idx + 1, idx + wn + 1, idx + wn};
+                        unsigned int intersection_count = 0;
+                        std::array<unsigned int, 2> intersection_edges;
+                        std::array<glm::vec2, 2> intersection_points;
+                        HeavisideEnrichedQuad element;
+                        if (level_set_1_signed_dist[idx] * level_set_1_signed_dist[idx + 1] < 0)
+                        {
+                            //  &&
+                            // vertices_level_set_signs[idx].tip == 0 && vertices_level_set_signs[idx + 1].tip == 0
+                            
+                            intersection_edges[intersection_count] = 0;
+                            intersection_points[intersection_count] =
+                                interpolate(vertices[idx], vertices[idx + 1], level_set_1_signed_dist[idx],
+                                            level_set_1_signed_dist[idx + 1]);
+                            // very easy for linear quad xi=(f1+f2)/(f1-f2) \in [-1, 1]
+                            element.intersection_points_local[intersection_count] =
+                                glm::vec2{
+                                    (level_set_1_signed_dist[idx]+level_set_1_signed_dist[idx+1])/(level_set_1_signed_dist[idx]-level_set_1_signed_dist[idx+1]),
+                                    -1
+                                };
+                            intersection_count++;
+                        }
+                        if (level_set_1_signed_dist[idx + 1] * level_set_1_signed_dist[idx + wn + 1] < 0)
+                        {
+                            if (intersection_count > 1)
+                            {
+                                throw std::runtime_error("NotImplemented: more than 2 intersection_edges");
+                            }
+                            intersection_edges[intersection_count] = 1;
+                            intersection_points[intersection_count] =
+                                interpolate(vertices[idx + 1], vertices[idx + wn + 1], level_set_1_signed_dist[idx + 1],
+                                            level_set_1_signed_dist[idx + wn + 1]);
+                            element.intersection_points_local[intersection_count] =
+                                glm::vec2{
+                                    1,
+                                    (level_set_1_signed_dist[idx + 1]+level_set_1_signed_dist[idx + wn + 1])/(level_set_1_signed_dist[idx + 1]-level_set_1_signed_dist[idx + wn + 1]),
+                                };
+                            intersection_count++;
+                        }
+                        if (level_set_1_signed_dist[idx + wn + 1] * level_set_1_signed_dist[idx + wn] < 0)
+                        {
+                            if (intersection_count > 1)
+                            {
+                                throw std::runtime_error("NotImplemented: more than 2 intersection_edges");
+                            }
+                            intersection_edges[intersection_count] = 2;
+                            intersection_points[intersection_count] =
+                                interpolate(vertices[idx + wn + 1], vertices[idx + wn],
+                                            level_set_1_signed_dist[idx + wn + 1], level_set_1_signed_dist[idx + wn]);
+                            element.intersection_points_local[intersection_count] =
+                                glm::vec2{
+                                    -(level_set_1_signed_dist[idx + wn + 1]+level_set_1_signed_dist[idx + wn])/(level_set_1_signed_dist[idx + wn + 1]-level_set_1_signed_dist[idx + wn]),
+                                    1
+                                };
+                            intersection_count++;
+                        }
+                        if (level_set_1_signed_dist[idx + wn] * level_set_1_signed_dist[idx] < 0)
+                        {
+                            if (intersection_count > 1)
+                            {
+                                throw std::runtime_error("NotImplemented: more than 2 intersection_edges");
+                            }
+                            intersection_edges[intersection_count] = 3;
+                            intersection_points[intersection_count] =
+                                interpolate(vertices[idx + wn], vertices[idx], level_set_1_signed_dist[idx + wn],
+                                            level_set_1_signed_dist[idx]);
+                            element.intersection_points_local[intersection_count] =
+                                glm::vec2{
+                                    -1,
+                                    -(level_set_1_signed_dist[idx + wn] + level_set_1_signed_dist[idx])/(level_set_1_signed_dist[idx + wn]-level_set_1_signed_dist[idx]),
+                                };
+                            intersection_count++;
+                        }
+                        if (intersection_count != 2){
+                            throw std::runtime_error("intersection_count != 2");
+                        }
+                        std::vector<Triangle1HeavisideSign> partition;
+        
+                        element.node_ids[0] = idx;
+                        element.node_ids[1] = idx + 1;
+                        element.node_ids[2] = idx + wn + 1;
+                        element.node_ids[3] = idx + wn;
+                        
+                        partition.reserve(4);
+                        // std::array<glm::vec2, 5> poly;
+                        std::array<unsigned char, 5> poly;
+                        unsigned char polyVerticesCount = 0;
+                        
+                        // poly[0] = vertices[indexes[0]];
+                        poly[0] = 0;
+                        // since we store in HeavisideEnrichedQuad firstly positive Heaviside triangles
+                        // and my code below doesn't know it, we need to somehow rearrange indices
+                        // to positive Heaviside triangles should occur first
+                        // we check sign by looking at sign of vertex with index indexes[0]
+                        // continue;
+                        for (unsigned int i = 0; i < 4; i++)
+                        {
+                            if (intersection_edges[0] == i)
+                            {
+                                // poly[polyVerticesCount++] = vertices[indexes[i]];
+                                // poly[polyVerticesCount++] = intersection_points[0];
+                                // poly[polyVerticesCount++] = intersection_points[1];
+                                poly[polyVerticesCount++] = i;
+                                poly[polyVerticesCount++] = 4;
+                                poly[polyVerticesCount++] = 5;
+                                i = intersection_edges[1];
+                            }
+                            else
+                            {
+                                // poly[polyVerticesCount++] = vertices[indexes[i]];
+                                poly[polyVerticesCount++] = i;
+                            }
+                        }
+                        if (polyVerticesCount == 3)
+                        {
+                            if (vertices_level_set_signs[indexes[0]].sign > 0){
+                                element.positive_heaviside_triangles_num = 1;
+                                element.triangles[0] = {poly[0], poly[1], poly[2]};
+                            }else{
+                                // Turned out that first pass is single negative triangle and we write
+                                // it to the end. Thus, there will be 3 positive triangles
+                                element.positive_heaviside_triangles_num = 3;
+                                element.triangles[3] = {poly[0], poly[1], poly[2]};
+                            }
+                            // partition.push_back(Triangle1HeavisideSign{poly[0], poly[1], poly[2],
+                            //                                            vertices_level_set_signs[indexes[0]].sign});
+                        }
+                        else
+                        {
+                            if (vertices_level_set_signs[indexes[0]].sign > 0){
+                                // There are more than one positive triangles
+                                element.positive_heaviside_triangles_num = polyVerticesCount - 2;
+                                for (unsigned char i = 1; i < polyVerticesCount - 1; i++)
+                                {
+                                    element.triangles[i-1] = {poly[0], poly[i], poly[static_cast<unsigned char>(i + 1)]};
+                                }
+                            }else{
+                                // 4 - (polyVerticesCount - 2)
+                                element.positive_heaviside_triangles_num = 6 - polyVerticesCount;
+                                for (unsigned char i = 1; i < polyVerticesCount - 1; i++)
+                                {
+                                    element.triangles[i+element.positive_heaviside_triangles_num-1] = {poly[0], poly[i], poly[static_cast<unsigned char>(i + 1)]};
+                                }
+                            }
+                            // partition.push_back(Triangle1HeavisideSign{poly[0], poly[i], poly[i + 1],
+                            //                                         vertices_level_set_signs[indexes[0]].sign});
+                        }
+                        polyVerticesCount = 0;
+                        // poly[polyVerticesCount++] = intersection_points[1];
+                        // poly[polyVerticesCount++] = intersection_points[0];
+                        poly[polyVerticesCount++] = 5;
+                        poly[polyVerticesCount++] = 4;
+                        for (unsigned int i = intersection_edges[0] + 1; i < 4; i++)
+                        {
+                            if (intersection_edges[1] == i)
+                            {
+                                // poly[polyVerticesCount++] = vertices[indexes[i]];
+                                poly[polyVerticesCount++] = i;
+                                break;
+                            }
+                            else
+                            {
+                                // poly[polyVerticesCount++] = vertices[indexes[i]];
+                                poly[polyVerticesCount++] = i;
+                            }
+                        }
+                        if (polyVerticesCount == 3)
+                        {
+                            if (vertices_level_set_signs[indexes[intersection_edges[1]]].sign > 0){
+                                element.triangles[0] = {poly[0], poly[1], poly[2]};
+                            }else{
+                                element.triangles[3] = {poly[0], poly[1], poly[2]};
+                            }
+                            // partition.push_back(Triangle1HeavisideSign{
+                            //     poly[0], poly[1], poly[2], vertices_level_set_signs[indexes[intersection_edges[1]]].sign});
+                        }
+                        else
+                        {
+                            if (vertices_level_set_signs[indexes[intersection_edges[1]]].sign > 0){
+                                for (unsigned char i = 1; i < polyVerticesCount - 1; i++)
+                                {
+                                    element.triangles[i-1] = {poly[0], poly[i], poly[static_cast<unsigned char>(i + 1)]};
+                                }
+                            }else{
+                                for (unsigned char i = 1; i < polyVerticesCount - 1; i++)
+                                {
+                                    element.triangles[i+(polyVerticesCount-3)] = {poly[0], poly[i], poly[static_cast<unsigned char>(i + 1)]};
+                                }
+                            }
+                            // partition.push_back(
+                            //     Triangle1HeavisideSign{poly[0], poly[i], poly[i + 1],
+                            //                            vertices_level_set_signs[indexes[intersection_edges[1]]].sign});
+                        }
+                        heaviside_enriched_quads.push_back(element);
+                        // enriched_quad.triangulation = partition;
+                        for (int node : indexes) {
+                            heaviside_enriched_nodes[node] = true;
+                        }
+
+                    }
+                }
+                if (enrichment_type == NoEnrichment){
+                    elements.push_back(LinearQuad::Element{idx, idx+1, idx+wn+1, idx+wn});
+                }else if(enrichment_type == Tip){
+                    elements.push_back(LinearQuad::Element{idx, idx+1, idx+wn+1, idx+wn});
+                }
+                // Quad quad = Quad{vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
+                //                  packColor(glm::vec4(0.0f, 1.0f, 0.0f, 0.5f))};
+
+                // if (enriched_quad.enrichment_type == NoEnrichment)
+                // {
+                //     quads.push_back(Quad{vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
+                //                          packColor(glm::vec4(1.0f, 0.0f, 0.0f, 0.5f))});
+                //     continue;
+                // }
+                // else if (enriched_quad.enrichment_type == Heaviside)
+                // {
+                //     quads.push_back(Quad{vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
+                //                          packColor(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f))});
+                // }
+                // else if (enriched_quad.enrichment_type == Tip)
+                // {
+                //     quads.push_back(Quad{vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
+                //                          packColor(glm::vec4(0.0f, 0.0f, 1.0f, 0.5f))});
+                // }
+                // enriched_quad.v00 = vertices[idx];
+                // enriched_quad.v10 = vertices[idx + 1];
+                // enriched_quad.v11 = vertices[idx + wn + 1];
+                // enriched_quad.v01 = vertices[idx + wn];
+                // enriched_elements.push_back(enriched_quad);
+                // std::visit(
+                //     [&](auto &vec) {
+                //         for (const auto &tri : vec)
+                //         {
+                    //             polygonal_chains.push_back(
+                //                 PolygonalChain{std::vector<glm::vec2>{tri.v0, tri.v1, tri.v2, tri.v0},
+                //                                glm::vec4{(rand() % 1000) / 1000.0f, (rand() % 1000) / 1000.0f,
+                //                                          (rand() % 1000) / 1000.0f, 1.0f}});
+                //         }
+                //     },
+                //     enriched_quad.triangulation);
+            }
+        }
     }
-
-    std::cout << "searching for enriched elements" << std::endl;
-
-    for (unsigned int j = 0; j < hn - 1; j++)
-    {
-        for (unsigned int i = 0; i < wn - 1; i++)
-        {
-            // if (i == 1 and j == 1) continue;
-            unsigned int idx = j * wn + i;
-            EnrichedQuad enriched_quad;
-            enriched_quad.enrichment_type = NoEnrichment;
-            EnrichmentType enrichment_type = NoEnrichment;
-            // if (idx != 53)
-            //     continue;
-            if ((vertices_level_set_signs[idx].sign == vertices_level_set_signs[idx + 1].sign &&
-                 vertices_level_set_signs[idx + 1].sign == vertices_level_set_signs[idx + wn].sign &&
-                 vertices_level_set_signs[idx + wn].sign == vertices_level_set_signs[idx + wn + 1].sign))
-            {
-
-                if (vertices_level_set_signs[idx].index != vertices_level_set_signs[idx + 1].index)
-                {
-                    if (idx + wn < vertices.size() && idx + 1 + wn < vertices.size() &&
-                        inQuad(vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
-                               crack_vertices[vertices_level_set_signs[idx + 1].index]))
-                    {
-                        enriched_quad.enrichment_type = Heaviside;
-                        enrichment_type = Heaviside;
-                    }
-                    else if (idx - wn < 0 && idx + 1 - wn < 0 &&
-                             inQuad(vertices[idx - wn], vertices[idx - wn + 1], vertices[idx + 1], vertices[idx],
-                                    crack_vertices[vertices_level_set_signs[idx + 1].index]))
-                    {
-                        enriched_quad.enrichment_type = Heaviside;
-                        enrichment_type = Heaviside;
-                    }
-                }
-                else if (vertices_level_set_signs[idx + 1].index != vertices_level_set_signs[idx + wn + 1].index)
-                {
-                    throw std::runtime_error("NotImplemented");
-                }
-                else if (vertices_level_set_signs[idx + wn + 1].index != vertices_level_set_signs[idx + wn].index)
-                {
-                    continue;
-                    throw std::runtime_error("NotImplemented");
-                    // if (idx + wn < vertices.size() && idx + 1 + wn < vertices.size() &&
-                    //     !inQuad(vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
-                    //             crack_vertices[std::min(vertices_level_set_signs[idx + wn + 1].index,
-                    //                                    vertices_level_set_signs[idx + wn].index)]))
-                    // {
-                    //     continue;
-                    // }
-                    // enrichment_type = 1;
-                }
-                else if (vertices_level_set_signs[idx].index != vertices_level_set_signs[idx + wn].index)
-                {
-                    continue;
-                    throw std::runtime_error("NotImplemented");
-                    // if (idx + wn < vertices.size() && idx + 1 + wn < vertices.size() &&
-                    //     !inQuad(vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
-                    //             crack_vertices[std::min(vertices_level_set_signs[idx].index,
-                    //                                    vertices_level_set_signs[idx + wn].index)]))
-                    // {
-                    //     continue;
-                    // }
-                    // enrichment_type = 1;
-                }
-            }
-            else if ((vertices_level_set_signs[idx].tip == -1 && vertices_level_set_signs[idx + 1].tip == -1 &&
-                      vertices_level_set_signs[idx + wn].tip == -1 &&
-                      vertices_level_set_signs[idx + wn + 1].tip == -1) ||
-                     (vertices_level_set_signs[idx].tip == 1 && vertices_level_set_signs[idx + 1].tip == 1 &&
-                      vertices_level_set_signs[idx + wn].tip == 1 && vertices_level_set_signs[idx + wn + 1].tip == 1))
-            {
-                // no enrichment
-            }
-            else
-            {
-                if ((vertices_level_set_signs[idx].tip == -1) + (vertices_level_set_signs[idx + 1].tip == -1) +
-                        (vertices_level_set_signs[idx + wn].tip == -1) +
-                        (vertices_level_set_signs[idx + wn + 1].tip == -1) >=
-                    2)
-                {
-                    if (inQuad(vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
-                                first_vertex))
-                    {
-                        int intersection_edge = -1;
-                        glm::vec2 intersection_point;
-                        if (level_set_1_signed_dist[idx] * level_set_1_signed_dist[idx + 1] < 0 &&
-                            vertices_level_set_signs[idx].tip == 0 && vertices_level_set_signs[idx + 1].tip == 0)
-                        {
-                            intersection_edge = 0;
-                            intersection_point = interpolate(vertices[idx], vertices[idx + 1], level_set_1_signed_dist[idx],
-                                                            level_set_1_signed_dist[idx + 1]);
-                        }
-                        if (level_set_1_signed_dist[idx + 1] * level_set_1_signed_dist[idx + wn + 1] < 0 &&
-                            vertices_level_set_signs[idx + 1].tip == 0 && vertices_level_set_signs[idx + wn + 1].tip == 0)
-                        {
-                            if (intersection_edge != -1)
-                            {
-                                throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
-                            }
-                            intersection_edge = 1;
-                            intersection_point =
-                                interpolate(vertices[idx + 1], vertices[idx + wn + 1], level_set_1_signed_dist[idx + 1],
-                                            level_set_1_signed_dist[idx + wn + 1]);
-                        }
-                        if (level_set_1_signed_dist[idx + wn + 1] * level_set_1_signed_dist[idx + wn] < 0 &&
-                            vertices_level_set_signs[idx + wn + 1].tip == 0 && vertices_level_set_signs[idx + wn].tip == 0)
-                        {
-                            if (intersection_edge != -1)
-                            {
-                                throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
-                            }
-                            intersection_edge = 2;
-                            intersection_point =
-                                interpolate(vertices[idx + wn + 1], vertices[idx + wn],
-                                            level_set_1_signed_dist[idx + wn + 1], level_set_1_signed_dist[idx + wn]);
-                        }
-                        if (level_set_1_signed_dist[idx + wn] * level_set_1_signed_dist[idx] < 0 &&
-                            vertices_level_set_signs[idx + wn].tip == 0 && vertices_level_set_signs[idx].tip == 0)
-                        {
-                            if (intersection_edge != -1)
-                            {
-                                throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
-                            }
-                            intersection_edge = 3;
-                            intersection_point =
-                                interpolate(vertices[idx + wn], vertices[idx], level_set_1_signed_dist[idx + wn],
-                                            level_set_1_signed_dist[idx]);
-                        }
-                        if (intersection_edge == -1)
-                        {
-                            throw std::runtime_error("No intersection edge found for tip enrichment");
-                        }
-                        std::array<unsigned int, 4> indexes = {idx, idx + 1, idx + wn + 1, idx + wn};
-                        std::vector<Triangle1> triangulation;
-                        triangulation.push_back(
-                            Triangle1{first_vertex, vertices[indexes[intersection_edge]], intersection_point});
-                        triangulation.push_back(Triangle1{first_vertex, intersection_point,
-                                                        vertices[indexes[positive_mod(intersection_edge + 1, 4)]]});
-                        for (unsigned int i = 0; i < 3; i++)
-                        {
-                            triangulation.push_back(
-                                Triangle1{first_vertex, vertices[indexes[positive_mod(intersection_edge + i + 1, 4)]],
-                                        vertices[indexes[positive_mod(intersection_edge + i + 2, 4)]]});
-                        }
-                        enriched_quad.enrichment_type = Tip;
-                        enriched_quad.triangulation = std::move(triangulation);
-                        enrichment_type = Tip;
-                    }
-                }
-                if ((vertices_level_set_signs[idx].tip == 1) + (vertices_level_set_signs[idx + 1].tip == 1) +
-                        (vertices_level_set_signs[idx + wn].tip == 1) +
-                        (vertices_level_set_signs[idx + wn + 1].tip == 1) >=
-                    2)
-                {
-                    if (inQuad(vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
-                                last_vertex))
-                    {
-                        if (enriched_quad.enrichment_type == Tip)
-                            throw std::runtime_error("NotImplemented: two tips in one element");
-
-                        int intersection_edge = -1;
-                        glm::vec2 intersection_point;
-                        if (level_set_1_signed_dist[idx] * level_set_1_signed_dist[idx + 1] < 0 &&
-                            vertices_level_set_signs[idx].tip == 0 && vertices_level_set_signs[idx + 1].tip == 0)
-                        {
-                            intersection_edge = 0;
-                            intersection_point = interpolate(vertices[idx], vertices[idx + 1], level_set_1_signed_dist[idx],
-                                                            level_set_1_signed_dist[idx + 1]);
-                        }
-                        if (level_set_1_signed_dist[idx + 1] * level_set_1_signed_dist[idx + wn + 1] < 0 &&
-                            vertices_level_set_signs[idx + 1].tip == 0 && vertices_level_set_signs[idx + wn + 1].tip == 0)
-                        {
-                            if (intersection_edge != -1)
-                            {
-                                throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
-                            }
-                            intersection_edge = 1;
-                            intersection_point =
-                                interpolate(vertices[idx + 1], vertices[idx + wn + 1], level_set_1_signed_dist[idx + 1],
-                                            level_set_1_signed_dist[idx + wn + 1]);
-                        }
-                        if (level_set_1_signed_dist[idx + wn + 1] * level_set_1_signed_dist[idx + wn] < 0 &&
-                            vertices_level_set_signs[idx + wn + 1].tip == 0 && vertices_level_set_signs[idx + wn].tip == 0)
-                        {
-                            if (intersection_edge != -1)
-                            {
-                                throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
-                            }
-                            intersection_edge = 2;
-                            intersection_point =
-                                interpolate(vertices[idx + wn + 1], vertices[idx + wn],
-                                            level_set_1_signed_dist[idx + wn + 1], level_set_1_signed_dist[idx + wn]);
-                        }
-                        if (level_set_1_signed_dist[idx + wn] * level_set_1_signed_dist[idx] < 0 &&
-                            vertices_level_set_signs[idx + wn].tip == 0 && vertices_level_set_signs[idx].tip == 0)
-                        {
-                            if (intersection_edge != -1)
-                            {
-                                throw std::runtime_error("NotImplemented: more than 1 intersection_edge");
-                            }
-                            intersection_edge = 3;
-                            intersection_point =
-                                interpolate(vertices[idx + wn], vertices[idx], level_set_1_signed_dist[idx + wn],
-                                            level_set_1_signed_dist[idx]);
-                        }
-                        if (intersection_edge == -1)
-                        {
-                            throw std::runtime_error("No intersection edge found for tip enrichment");
-                        }
-                        std::array<unsigned int, 4> indexes = {idx, idx + 1, idx + wn + 1, idx + wn};
-
-                        std::vector<Triangle1> triangulation;
-                        triangulation.push_back(
-                            Triangle1{last_vertex, vertices[indexes[intersection_edge]], intersection_point});
-                        triangulation.push_back(Triangle1{last_vertex, intersection_point,
-                                                        vertices[indexes[positive_mod(intersection_edge + 1, 4)]]});
-                        for (unsigned int i = 0; i < 3; i++)
-                        {
-                            triangulation.push_back(
-                                Triangle1{last_vertex, vertices[indexes[positive_mod(intersection_edge + i + 1, 4)]],
-                                        vertices[indexes[positive_mod(intersection_edge + i + 2, 4)]]});
-                        }
-                        enriched_quad.enrichment_type = Tip;
-                        enriched_quad.triangulation = std::move(triangulation);
-                        enrichment_type = Tip;
-                    } 
-                }
-                if (enrichment_type != Tip)
-                {
-                    enriched_quad.enrichment_type = Heaviside;
-                    enrichment_type = Heaviside;
-                    std::array<unsigned int, 4> indexes = {idx, idx + 1, idx + wn + 1, idx + wn};
-                    unsigned int intersection_count = 0;
-                    std::array<unsigned int, 2> intersection_edges;
-                    std::array<glm::vec2, 2> intersection_points;
-                    HeavisideEnrichedQuad element;
-                    if (level_set_1_signed_dist[idx] * level_set_1_signed_dist[idx + 1] < 0 &&
-                        vertices_level_set_signs[idx].tip == 0 && vertices_level_set_signs[idx + 1].tip == 0)
-                    {
-                        intersection_edges[intersection_count] = 0;
-                        intersection_points[intersection_count] =
-                            interpolate(vertices[idx], vertices[idx + 1], level_set_1_signed_dist[idx],
-                                        level_set_1_signed_dist[idx + 1]);
-                        // very easy for linear quad xi=(f1+f2)/(f1-f2) \in [-1, 1]
-                        element.intersection_points_local[intersection_count] =
-                            glm::vec2{
-                                (level_set_1_signed_dist[idx]+level_set_1_signed_dist[idx+1])/(level_set_1_signed_dist[idx]-level_set_1_signed_dist[idx+1]),
-                                -1
-                            };
-                        intersection_count++;
-                    }
-                    if (level_set_1_signed_dist[idx + 1] * level_set_1_signed_dist[idx + wn + 1] < 0 &&
-                        vertices_level_set_signs[idx + 1].tip == 0 && vertices_level_set_signs[idx + wn + 1].tip == 0)
-                    {
-                        if (intersection_count > 1)
-                        {
-                            throw std::runtime_error("NotImplemented: more than 2 intersection_edges");
-                        }
-                        intersection_edges[intersection_count] = 1;
-                        intersection_points[intersection_count] =
-                            interpolate(vertices[idx + 1], vertices[idx + wn + 1], level_set_1_signed_dist[idx + 1],
-                                        level_set_1_signed_dist[idx + wn + 1]);
-                        element.intersection_points_local[intersection_count] =
-                            glm::vec2{
-                                1,
-                                (level_set_1_signed_dist[idx + 1]+level_set_1_signed_dist[idx + wn + 1])/(level_set_1_signed_dist[idx + 1]-level_set_1_signed_dist[idx + wn + 1]),
-                            };
-                        intersection_count++;
-                    }
-                    if (level_set_1_signed_dist[idx + wn + 1] * level_set_1_signed_dist[idx + wn] < 0 &&
-                        vertices_level_set_signs[idx + wn + 1].tip == 0 && vertices_level_set_signs[idx + wn].tip == 0)
-                    {
-                        if (intersection_count > 1)
-                        {
-                            throw std::runtime_error("NotImplemented: more than 2 intersection_edges");
-                        }
-                        intersection_edges[intersection_count] = 2;
-                        intersection_points[intersection_count] =
-                            interpolate(vertices[idx + wn + 1], vertices[idx + wn],
-                                        level_set_1_signed_dist[idx + wn + 1], level_set_1_signed_dist[idx + wn]);
-                        element.intersection_points_local[intersection_count] =
-                            glm::vec2{
-                                -(level_set_1_signed_dist[idx + wn + 1]+level_set_1_signed_dist[idx + wn])/(level_set_1_signed_dist[idx + wn + 1]-level_set_1_signed_dist[idx + wn]),
-                                1
-                            };
-                        intersection_count++;
-                    }
-                    if (level_set_1_signed_dist[idx + wn] * level_set_1_signed_dist[idx] < 0 &&
-                        vertices_level_set_signs[idx + wn].tip == 0 && vertices_level_set_signs[idx].tip == 0)
-                    {
-                        if (intersection_count > 1)
-                        {
-                            throw std::runtime_error("NotImplemented: more than 2 intersection_edges");
-                        }
-                        intersection_edges[intersection_count] = 3;
-                        intersection_points[intersection_count] =
-                            interpolate(vertices[idx + wn], vertices[idx], level_set_1_signed_dist[idx + wn],
-                                        level_set_1_signed_dist[idx]);
-                        element.intersection_points_local[intersection_count] =
-                            glm::vec2{
-                                -1,
-                                -(level_set_1_signed_dist[idx + wn] + level_set_1_signed_dist[idx])/(level_set_1_signed_dist[idx + wn]-level_set_1_signed_dist[idx]),
-                            };
-                        intersection_count++;
-                    }
-                    std::vector<Triangle1HeavisideSign> partition;
-    
-                    element.vertex_indices[0] = idx;
-                    element.vertex_indices[1] = idx + 1;
-                    element.vertex_indices[2] = idx + wn + 1;
-                    element.vertex_indices[3] = idx + wn;
-                    
-                    partition.reserve(4);
-                    // std::array<glm::vec2, 5> poly;
-                    std::array<unsigned char, 5> poly;
-                    unsigned char polyVerticesCount = 0;
-                    
-                    // poly[0] = vertices[indexes[0]];
-                    poly[0] = 0;
-                    // since we store in HeavisideEnrichedQuad firstly positive Heaviside triangles
-                    // and my code below doesn't know it, we need to somehow rearrange indices
-                    // to positive Heaviside triangles should occur first
-                    // we check sign by looking at sign of vertex with index indexes[0]
-                    // continue;
-                    for (unsigned int i = 0; i < 4; i++)
-                    {
-                        if (intersection_edges[0] == i)
-                        {
-                            // poly[polyVerticesCount++] = vertices[indexes[i]];
-                            // poly[polyVerticesCount++] = intersection_points[0];
-                            // poly[polyVerticesCount++] = intersection_points[1];
-                            poly[polyVerticesCount++] = i;
-                            poly[polyVerticesCount++] = 4;
-                            poly[polyVerticesCount++] = 5;
-                            i = intersection_edges[1];
-                        }
-                        else
-                        {
-                            // poly[polyVerticesCount++] = vertices[indexes[i]];
-                            poly[polyVerticesCount++] = i;
-                        }
-                    }
-                    if (polyVerticesCount == 3)
-                    {
-                        if (vertices_level_set_signs[indexes[0]].sign > 0){
-                            element.positive_heaviside_triangles_num = 1;
-                            element.triangles[0] = {poly[0], poly[1], poly[2]};
-                        }else{
-                            // Turned out that first pass is single negative triangle and we write
-                            // it to the end. Thus, there will be 3 positive triangles
-                            element.positive_heaviside_triangles_num = 3;
-                            element.triangles[3] = {poly[0], poly[1], poly[2]};
-                        }
-                        // partition.push_back(Triangle1HeavisideSign{poly[0], poly[1], poly[2],
-                        //                                            vertices_level_set_signs[indexes[0]].sign});
-                    }
-                    else
-                    {
-                        if (vertices_level_set_signs[indexes[0]].sign > 0){
-                            // There are more than one positive triangles
-                            element.positive_heaviside_triangles_num = polyVerticesCount - 2;
-                            for (unsigned char i = 1; i < polyVerticesCount - 1; i++)
-                            {
-                                element.triangles[i-1] = {poly[0], poly[i], poly[static_cast<unsigned char>(i + 1)]};
-                            }
-                        }else{
-                            // 4 - (polyVerticesCount - 2)
-                            element.positive_heaviside_triangles_num = 6 - polyVerticesCount;
-                            for (unsigned char i = 1; i < polyVerticesCount - 1; i++)
-                            {
-                                element.triangles[i+element.positive_heaviside_triangles_num-1] = {poly[0], poly[i], poly[static_cast<unsigned char>(i + 1)]};
-                            }
-                        }
-                        // partition.push_back(Triangle1HeavisideSign{poly[0], poly[i], poly[i + 1],
-                        //                                         vertices_level_set_signs[indexes[0]].sign});
-                    }
-                    polyVerticesCount = 0;
-                    // poly[polyVerticesCount++] = intersection_points[1];
-                    // poly[polyVerticesCount++] = intersection_points[0];
-                    poly[polyVerticesCount++] = 5;
-                    poly[polyVerticesCount++] = 4;
-                    for (unsigned int i = intersection_edges[0] + 1; i < 4; i++)
-                    {
-                        if (intersection_edges[1] == i)
-                        {
-                            // poly[polyVerticesCount++] = vertices[indexes[i]];
-                            poly[polyVerticesCount++] = i;
-                            break;
-                        }
-                        else
-                        {
-                            // poly[polyVerticesCount++] = vertices[indexes[i]];
-                            poly[polyVerticesCount++] = i;
-                        }
-                    }
-                    if (polyVerticesCount == 3)
-                    {
-                        if (vertices_level_set_signs[indexes[intersection_edges[1]]].sign > 0){
-                            element.triangles[0] = {poly[0], poly[1], poly[2]};
-                        }else{
-                            element.triangles[3] = {poly[0], poly[1], poly[2]};
-                        }
-                        // partition.push_back(Triangle1HeavisideSign{
-                        //     poly[0], poly[1], poly[2], vertices_level_set_signs[indexes[intersection_edges[1]]].sign});
-                    }
-                    else
-                    {
-                        if (vertices_level_set_signs[indexes[intersection_edges[1]]].sign > 0){
-                            for (unsigned char i = 1; i < polyVerticesCount - 1; i++)
-                            {
-                                element.triangles[i-1] = {poly[0], poly[i], poly[static_cast<unsigned char>(i + 1)]};
-                            }
-                        }else{
-                            for (unsigned char i = 1; i < polyVerticesCount - 1; i++)
-                            {
-                                element.triangles[i+(polyVerticesCount-3)] = {poly[0], poly[i], poly[static_cast<unsigned char>(i + 1)]};
-                            }
-                        }
-                        // partition.push_back(
-                        //     Triangle1HeavisideSign{poly[0], poly[i], poly[i + 1],
-                        //                            vertices_level_set_signs[indexes[intersection_edges[1]]].sign});
-                    }
-                    heaviside_enriched_quads.push_back(element);
-                    // enriched_quad.triangulation = partition;
-                    for (int node : indexes) {
-                        heaviside_enriched_nodes[node] = true;
-                    }
-
-                }
-            }
-            if (enrichment_type == NoEnrichment){
-                elements.push_back(LinearQuad::Element{idx, idx+1, idx+wn+1, idx+wn});
-            }else if(enrichment_type == Tip){
-                elements.push_back(LinearQuad::Element{idx, idx+1, idx+wn+1, idx+wn});
-            }
-            // Quad quad = Quad{vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
-            //                  packColor(glm::vec4(0.0f, 1.0f, 0.0f, 0.5f))};
-
-            // if (enriched_quad.enrichment_type == NoEnrichment)
-            // {
-            //     quads.push_back(Quad{vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
-            //                          packColor(glm::vec4(1.0f, 0.0f, 0.0f, 0.5f))});
-            //     continue;
-            // }
-            // else if (enriched_quad.enrichment_type == Heaviside)
-            // {
-            //     quads.push_back(Quad{vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
-            //                          packColor(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f))});
-            // }
-            // else if (enriched_quad.enrichment_type == Tip)
-            // {
-            //     quads.push_back(Quad{vertices[idx], vertices[idx + 1], vertices[idx + wn + 1], vertices[idx + wn],
-            //                          packColor(glm::vec4(0.0f, 0.0f, 1.0f, 0.5f))});
-            // }
-            // enriched_quad.v00 = vertices[idx];
-            // enriched_quad.v10 = vertices[idx + 1];
-            // enriched_quad.v11 = vertices[idx + wn + 1];
-            // enriched_quad.v01 = vertices[idx + wn];
-            // enriched_elements.push_back(enriched_quad);
-            // std::visit(
-            //     [&](auto &vec) {
-            //         for (const auto &tri : vec)
-            //         {
-                //             polygonal_chains.push_back(
-            //                 PolygonalChain{std::vector<glm::vec2>{tri.v0, tri.v1, tri.v2, tri.v0},
-            //                                glm::vec4{(rand() % 1000) / 1000.0f, (rand() % 1000) / 1000.0f,
-            //                                          (rand() % 1000) / 1000.0f, 1.0f}});
-            //         }
-            //     },
-            //     enriched_quad.triangulation);
+    else{
+        elements.reserve((wn-1)*(hn-1));
+        unsigned int idx;
+        for (unsigned int i = 0; i < hn-1; i++){
+            for (unsigned int j = 0; j < wn-1; j++){
+                idx = i * wn + j;
+                elements.push_back(LinearQuad::Element{{idx, idx+1, idx+wn+1, idx+wn}});
+            }    
         }
     }
     const unsigned int num_nodes = vertices.size();
@@ -1104,18 +1170,21 @@ int main()
         total_triplets += n_local * (n_local + 1) / 2;
     }
     std::vector<Eigen::Triplet<double>> triplets;
-    
-    glm::vec4 color;
+    std::cout << "Not enriched " << elements.size() << " Heaviside: " << heaviside_enriched_quads.size() << std::endl;
+    std::cout << "Assembling matrix of size: " << dof_counter << std::endl;
+    std::cout << "Triplets count: " << total_triplets << std::endl;
+
     Eigen::Matrix3d D = setup_D_matrix(2 * std::pow(10, 11), 0.3, true);
+    /*
     for (const auto& quad: heaviside_enriched_quads){
         Eigen::Matrix<double, 16, 16> Ke;
         
         Ke.setZero();
         std::array<glm::vec2, 6> points = {
-            vertices[quad.vertex_indices[0]],
-            vertices[quad.vertex_indices[1]],
-            vertices[quad.vertex_indices[2]],
-            vertices[quad.vertex_indices[3]],
+            vertices[quad.node_ids[0]],
+            vertices[quad.node_ids[1]],
+            vertices[quad.node_ids[2]],
+            vertices[quad.node_ids[3]],
             quad.intersection_points_local[0],
             quad.intersection_points_local[1]
         };
@@ -1136,7 +1205,7 @@ int main()
         }};
         std::array<int, 4> node_signs;
         for (int n = 0; n < 4; ++n) {
-            node_signs[n] = vertices_level_set_signs[quad.vertex_indices[n]].sign;
+            node_signs[n] = vertices_level_set_signs[quad.node_ids[n]].sign;
         }
         // Eigen::Matrix2f J_xy_xieta = shape.dN_xi_eta * coords;
         double total_area = 0.0;
@@ -1228,44 +1297,142 @@ int main()
         // std::cout << "eigenvalues: " << es.eigenvalues() << std::endl;
         // std::cout << "total_area: " << total_area << std::endl;
         // std::cout << "det: " << Ke.determinant() << std::endl;
-        FEMAssemble::addElementSparseUpperStiffness(LinearQuad::Element{quad.vertex_indices[0],
-quad.vertex_indices[1],
-quad.vertex_indices[2],
-quad.vertex_indices[3]}, Ke, triplets, node_offset, node_ndof, 4);
-        // std::cout << "enriched " << Ke << std::endl;
-        // visualisation
-        color = {1.0f, 1.0f, 0.0f, 1.0f};
+        FEMAssemble::addElementSparseUpperStiffness(LinearQuad::Element{quad.node_ids[0],
+quad.node_ids[1],
+quad.node_ids[2],
+quad.node_ids[3]}, Ke, triplets, node_offset, node_ndof, 4);
+
+    }
+    */
+    for (const auto& quad: heaviside_enriched_quads){
+        Eigen::Matrix<double, 16, 16> Ke;
+        
+        Ke.setZero();
+        std::array<glm::vec2, 6> points = {
+            vertices[quad.node_ids[0]],
+            vertices[quad.node_ids[1]],
+            vertices[quad.node_ids[2]],
+            vertices[quad.node_ids[3]],
+            quad.intersection_points_local[0],
+            quad.intersection_points_local[1]
+        };
+        std::array<glm::vec2, 6> local_points = {
+            glm::vec2{-1, -1},
+            glm::vec2{1, -1},
+            glm::vec2{1, 1},
+            glm::vec2{-1, 1},
+            quad.intersection_points_local[0],
+            quad.intersection_points_local[1]
+        };
+        int sign = 1;
+        const Eigen::Matrix<double, 4, 2> coords{{
+            {points[0].x, points[0].y},
+            {points[1].x, points[1].y},
+            {points[2].x, points[2].y},
+            {points[3].x, points[3].y}
+        }};
+        std::array<int, 4> node_signs;
+        for (int n = 0; n < 4; ++n) {
+            node_signs[n] = vertices_level_set_signs[quad.node_ids[n]].sign;
+        }
+        // Eigen::Matrix2f J_xy_xieta = shape.dN_xi_eta * coords;
+        double total_area = 0.0;
         for (unsigned int i = 0; i < 4; i++){
+
             const std::array<unsigned char, 3>& triangle = quad.triangles[i];
             if (i >= quad.positive_heaviside_triangles_num){
-                color = {0.0f, 0.0f, 1.0f, 1.0f};
+                sign = -1;
             }
-            std::array<glm::vec2, 4> chain;
-            for (unsigned int j = 0; j < 3; j++){
-                if (triangle[j] < 4){
-                    chain[j] = points[triangle[j]];
-                }else{
-                    float xi = points[triangle[j]].x;
-                    float eta = points[triangle[j]].y;
-                    float N0 = (1 - xi) * (1 - eta) / 4.0f;
-                    float N1 = (1 + xi) * (1 - eta) / 4.0f;
-                    float N2 = (1 + xi) * (1 + eta) / 4.0f;
-                    float N3 = (1 - xi) * (1 + eta) / 4.0f;
-                    chain[j] = N0 * points[0] + N1 * points[1] + N2 * points[2] + N3 * points[3];
+            Eigen::Matrix2d J_xieta_rs{{
+                {local_points[triangle[1]].x-local_points[triangle[0]].x, local_points[triangle[2]].x-local_points[triangle[0]].x},
+                {local_points[triangle[1]].y-local_points[triangle[0]].y, local_points[triangle[2]].y-local_points[triangle[0]].y}
+            }};
+            double det_tri = J_xieta_rs.determinant();
+        //     std::cout << "Triangle " << i << " vertices (local): "
+        //   << local_points[triangle[0]].x << "," << local_points[triangle[0]].y << " ; "
+        //   << local_points[triangle[1]].x << "," << local_points[triangle[1]].y << " ; "
+        //   << local_points[triangle[2]].x << "," << local_points[triangle[2]].y << "\n";
+            for (unsigned int gp = 0; gp < LinearTriangle::TriangleSecondRule::NGauss; gp++){
+                float r = LinearTriangle::TriangleSecondRule::gauss_pts[gp][0];
+                float s = LinearTriangle::TriangleSecondRule::gauss_pts[gp][1];
+                float t = 1 - r - s;
+                float xi = local_points[triangle[0]].x*t+
+                    local_points[triangle[1]].x*r+
+                    local_points[triangle[2]].x*s;
+                float eta = local_points[triangle[0]].y*t+
+                local_points[triangle[1]].y*r+
+                local_points[triangle[2]].y*s;
+                LinearQuad::ShapeData shape;
+                // Node 1
+                shape.N[0] = 0.25 * (1 - xi) * (1 - eta);
+                shape.dN_xi_eta(0, 0) = -0.25 * (1 - eta);
+                shape.dN_xi_eta(1, 0) = -0.25 * (1 - xi);
+                // Node 2
+                shape.N[1] = 0.25 * (1 + xi) * (1 - eta);
+                shape.dN_xi_eta(0, 1) = 0.25 * (1 - eta);
+                shape.dN_xi_eta(1, 1) = -0.25 * (1 + xi);
+                // Node 3
+                shape.N[2] = 0.25 * (1 + xi) * (1 + eta);
+                shape.dN_xi_eta(0, 2) = 0.25 * (1 + eta);
+                shape.dN_xi_eta(1, 2) = 0.25 * (1 + xi);
+                // Node 4
+                shape.N[3] = 0.25 * (1 - xi) * (1 + eta);
+                shape.dN_xi_eta(0, 3) = -0.25 * (1 + eta);
+                shape.dN_xi_eta(1, 3) = 0.25 * (1 - xi);
+                LinearTriangle::TriangleSecondRule::JacobianData jd;
+                // Initialize to zero
+                // std::cout << coords << std::endl;
+                // std::cout << shape.dN_xi_eta << std::endl;
+                jd.J = shape.dN_xi_eta * coords;
+                bool invertible;
+                jd.J.computeInverseAndDetWithCheck(jd.invJ, jd.detJ, invertible, 1e-12);
+                if (!invertible)
+                    throw std::runtime_error("Jacobi matrix is not invertible");
+                Eigen::Matrix<double, 2, 4> dN_dx_dy;
+                dN_dx_dy = jd.invJ * shape.dN_xi_eta;
+                Eigen::Matrix<double, 3, 16> B;
+                for (int i = 0; i < 4; ++i) {
+                    B(0, 4*i)   = dN_dx_dy(0, i); // du/dx
+                    B(0, 4*i+1) = 0;
+                    B(1, 4*i) = 0;
+                    B(1, 4*i+1) = dN_dx_dy(1, i); // dv/dy
+                    B(2, 4*i)   = dN_dx_dy(1, i); // dv/dx
+                    B(2, 4*i+1) = dN_dx_dy(0, i); // du/dy
+
+                    double shifted_factor = sign - node_signs[i];   // = 0 on same side, ±2 on opposite
+                    B(0, 4*i+2)   = dN_dx_dy(0, i)*shifted_factor; // du/dx
+                    B(0, 4*i+3) = 0;
+                    B(1, 4*i+2) = 0;
+                    B(1, 4*i+3) = dN_dx_dy(1, i)*shifted_factor; // dv/dy
+                    B(2, 4*i+2)   = dN_dx_dy(1, i)*shifted_factor; // dv/dx
+                    B(2, 4*i+3) = dN_dx_dy(0, i)*shifted_factor; // du/dy
                 }
+                double factor = LinearTriangle::TriangleSecondRule::gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
+                if (det_tri < 0) std::cout << "det_tri < 0" << std::endl;
+                if (jd.detJ < 0) std::cout << "jd.detJ < 0" << std::endl;
+                Ke += factor * (B.transpose() * D * B);
+                // total_area += det_tri;
+                // Eigen::VectorXd rigid_x(16);
+                // rigid_x.setZero();
+                // for (int i = 0; i < 4; ++i) rigid_x(4*i) = 1.0;   // standard u_x = 1
+                // Eigen::VectorXd strain = B * rigid_x;   // but B is not available after assembly; we need to compute it again or store
+                // // Instead, compute the residual Ke * rigid_x
+                // Eigen::VectorXd res = Ke * rigid_x;
+                // std::cout << "Norm of Ke * rigid_x: " << res.norm() << std::endl;  // should be near 0
             }
-            chain[3] = chain[0];
-            // vec_chain
-            std::vector<glm::vec2> vec_chain;
-            vec_chain.reserve(4);
-            vec_chain.assign(chain.begin(), chain.end());
-            polygonal_chains.push_back(PolygonalChain{vec_chain, color});
         }
+        // Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 16, 16>> es(Ke);
+        // std::cout << "eigenvalues: " << es.eigenvalues() << std::endl;
+        // std::cout << "total_area: " << total_area << std::endl;
+        // std::cout << "det: " << Ke.determinant() << std::endl;
+        FEMAssemble::addElementSparseUpperStiffness(LinearQuad::Element{quad.node_ids[0],
+quad.node_ids[1],
+quad.node_ids[2],
+quad.node_ids[3]}, Ke, triplets, node_offset, node_ndof, 4);
+
     }
     
-    std::cout << elements.size() << " " << heaviside_enriched_quads.size() << std::endl;
-    std::cout << "Assembling matrix of size: " << dof_counter << std::endl;
-    std::cout << "Triplets count: " << total_triplets << std::endl;
+    
     
     Eigen::Matrix<double, 8, 8> Ke;
     Eigen::Matrix<double, 16, 16> Ke_expanded;
@@ -1297,7 +1464,7 @@ quad.vertex_indices[3]}, Ke, triplets, node_offset, node_ndof, 4);
         coordMat2.row(1) = coordMat.row(2);
         coordMat2.row(2) = coordMat.row(3);
         
-        Ke = LinearQuad::element_stiffness(coordMat, D, 1);
+        Ke = LinearQuad::element_stiffness(coordMat, D, 0.1);
         // whether no enrichment or blend
         if (heaviside_enriched_nodes[element.node_ids[0]] || heaviside_enriched_nodes[element.node_ids[1]] 
             || heaviside_enriched_nodes[element.node_ids[2]] || heaviside_enriched_nodes[element.node_ids[3]]){
@@ -1344,16 +1511,22 @@ quad.vertex_indices[3]}, Ke, triplets, node_offset, node_ndof, 4);
 
     for (unsigned int i = 0; i < wn; i++)
     {
-        fixedDofs.push_back(2 * i);
-        fixedDofs.push_back(2 * i + 1);
+        int off = node_offset[i];
+        fixedDofs.push_back(off);
+        fixedDofs.push_back(off + 1);
         fixedValues.push_back(0);
         fixedValues.push_back(0);
+        // off = node_offset[(wn * (hn - 1) + i)];
+        // fixedDofs.push_back(off);
+        // fixedDofs.push_back(off + 1);
+        // fixedValues.push_back(0.00001);
+        // fixedValues.push_back(0);
         // FEMAssemble::fixDOF(K, P, i, UX|UY);
     }
     for (unsigned int i = 0; i < wn; i++)
     {
         int off = node_offset[(wn * (hn - 1) + i)];
-        P(off + 1) = 100000;
+        // P(off + 1) = 500000;
     }
     // for (unsigned int i = hn * 0.2; i < hn * 0.8; i++){
     //     P((wn*(i)+0)*2) = -10000;
@@ -1381,7 +1554,7 @@ quad.vertex_indices[3]}, Ke, triplets, node_offset, node_ndof, 4);
     std::ofstream UoutFile("U.txt");
     UoutFile << Uout.str();
 
-    const double constexpr scale = 10000.0;  // factor to make deformation visible
+    const double constexpr scale = 1.0;  // factor to make deformation visible
     std::cout << "Scaling results with factor: " << scale << std::endl;
     std::vector<glm::vec2> node_displacement(num_nodes);
     for (int n = 0; n < num_nodes; ++n) {
@@ -1397,54 +1570,134 @@ quad.vertex_indices[3]}, Ke, triplets, node_offset, node_ndof, 4);
     }
 
     std::cout << "Creating GUI" << std::endl;
-    for (const auto& quad: heaviside_enriched_quads){
-        std::array<glm::vec2, 6> points = {
-            vertices_displaced[quad.vertex_indices[0]],
-            vertices_displaced[quad.vertex_indices[1]],
-            vertices_displaced[quad.vertex_indices[2]],
-            vertices_displaced[quad.vertex_indices[3]],
-            quad.intersection_points_local[0],
-            quad.intersection_points_local[1]
+    TriangleGUI::Renderer::instance();
+    // TriangleGUI::Renderer::instance().addTriangle(TriangleGUI::TriangleColored{glm::vec2{0.0f, 0.0f},
+    // glm::vec2{1.0f, 0.0f},glm::vec2{1.0f, 1.0f},packColor(glm::vec4(1.0f, 0.0f, 1.0f, 1.0f))});
+    // for (const auto& quad: heaviside_enriched_quads){
+    //     std::array<glm::vec2, 6> points = {
+    //         vertices_displaced[quad.node_ids[0]],
+    //         vertices_displaced[quad.node_ids[1]],
+    //         vertices_displaced[quad.node_ids[2]],
+    //         vertices_displaced[quad.node_ids[3]],
+    //         quad.intersection_points_local[0],
+    //         quad.intersection_points_local[1]
+    //     };
+    //     // visualisation
+    //     color = {1.0f, 1.0f, 0.0f, 1.0f};
+    //     for (unsigned int i = 0; i < 4; i++){
+    //         const std::array<unsigned char, 3>& triangle = quad.triangles[i];
+    //         if (i >= quad.positive_heaviside_triangles_num){
+    //             color = {0.0f, 0.0f, 1.0f, 1.0f};
+    //         }
+
+    //         for (unsigned int j = 0; j < 3; j++){
+    //             if (triangle[j] < 4){
+    //                 chain[j] = points[triangle[j]];
+    //             }else{
+    //                 float xi = points[triangle[j]].x;
+    //                 float eta = points[triangle[j]].y;
+    //                 float N0 = (1 - xi) * (1 - eta) / 4.0f;
+    //                 float N1 = (1 + xi) * (1 - eta) / 4.0f;
+    //                 float N2 = (1 + xi) * (1 + eta) / 4.0f;
+    //                 float N3 = (1 - xi) * (1 + eta) / 4.0f;
+    //                 chain[j] = N0 * points[0] + N1 * points[1] + N2 * points[2] + N3 * points[3];
+    //             }
+    //         }
+    //         chain[3] = chain[0];
+    //         // vec_chain
+    //         std::vector<glm::vec2> vec_chain;
+    //         vec_chain.reserve(4);
+    //         vec_chain.assign(chain.begin(), chain.end());
+    //         polygonal_chains.push_back(PolygonalChain{vec_chain, color});
+    //     }
+    // }
+    for (const LinearQuad::Element& element: elements){
+        quads.push_back(Quad{vertices_displaced[element.node_ids[0]], vertices_displaced[element.node_ids[1]], vertices_displaced[element.node_ids[2]],
+            vertices_displaced[element.node_ids[3]], packColor(glm::vec4(1.0f, 0.0f, 0.0f, 1.0f))});
+    }
+    for (const HeavisideEnrichedQuad& element: heaviside_enriched_quads){
+        // // u = sum n_i u_i + sum n_i * a_i * (h(x) - h(i))
+        // // u = n1*u1 + n2*u2 + n3*u3 + n4*u4 + n1*a1*(1 + 1) + n2*a2*(1 + 1) + n3*a3*(1 - 1)
+        // // + n4*a4*(1 - 1)
+        std::array<glm::vec2, 6> points_positive_heaviside = {
+            vertices_displaced[element.node_ids[0]],
+            vertices_displaced[element.node_ids[1]],
+            vertices_displaced[element.node_ids[2]],
+            vertices_displaced[element.node_ids[3]]
         };
-        // visualisation
-        color = {1.0f, 1.0f, 0.0f, 1.0f};
-        for (unsigned int i = 0; i < 4; i++){
-            const std::array<unsigned char, 3>& triangle = quad.triangles[i];
-            if (i >= quad.positive_heaviside_triangles_num){
-                color = {0.0f, 0.0f, 1.0f, 1.0f};
-            }
-            std::array<glm::vec2, 4> chain;
-            for (unsigned int j = 0; j < 3; j++){
-                if (triangle[j] < 4){
-                    chain[j] = points[triangle[j]];
-                }else{
-                    float xi = points[triangle[j]].x;
-                    float eta = points[triangle[j]].y;
-                    float N0 = (1 - xi) * (1 - eta) / 4.0f;
-                    float N1 = (1 + xi) * (1 - eta) / 4.0f;
-                    float N2 = (1 + xi) * (1 + eta) / 4.0f;
-                    float N3 = (1 - xi) * (1 + eta) / 4.0f;
-                    chain[j] = N0 * points[0] + N1 * points[1] + N2 * points[2] + N3 * points[3];
-                }
-            }
-            chain[3] = chain[0];
-            // vec_chain
-            std::vector<glm::vec2> vec_chain;
-            vec_chain.reserve(4);
-            vec_chain.assign(chain.begin(), chain.end());
-            polygonal_chains.push_back(PolygonalChain{vec_chain, color});
+        std::array<glm::vec2, 4> a = {
+            glm::vec2{u(node_offset[element.node_ids[0]]+2), u(node_offset[element.node_ids[0]]+3)},
+            glm::vec2{u(node_offset[element.node_ids[1]]+2), u(node_offset[element.node_ids[1]]+3)},
+            glm::vec2{u(node_offset[element.node_ids[2]]+2), u(node_offset[element.node_ids[2]]+3)},
+            glm::vec2{u(node_offset[element.node_ids[3]]+2), u(node_offset[element.node_ids[3]]+3)}
+        };
+        float xi = element.intersection_points_local[0].x;
+        float eta = element.intersection_points_local[0].y;
+        float N0 = (1 - xi) * (1 - eta) / 4.0f;
+        float N1 = (1 + xi) * (1 - eta) / 4.0f;
+        float N2 = (1 + xi) * (1 + eta) / 4.0f;
+        float N3 = (1 - xi) * (1 + eta) / 4.0f;
+        points_positive_heaviside[4] = N0 * points_positive_heaviside[0] + N1 * points_positive_heaviside[1] + N2 * points_positive_heaviside[2] + N3 * points_positive_heaviside[3] +
+        2*N0*a[0] + 2*N1*a[1] + 0*N2*a[2] + 0*N3*a[3];
+        xi = element.intersection_points_local[1].x;
+        eta = element.intersection_points_local[1].y;
+        N0 = (1 - xi) * (1 - eta) / 4.0f;
+        N1 = (1 + xi) * (1 - eta) / 4.0f;
+        N2 = (1 + xi) * (1 + eta) / 4.0f;
+        N3 = (1 - xi) * (1 + eta) / 4.0f;
+        points_positive_heaviside[5] = N0 * points_positive_heaviside[0] + N1 * points_positive_heaviside[1] + N2 * points_positive_heaviside[2] + N3 * points_positive_heaviside[3] +
+        2*N0*a[0] + 2*N1*a[1] + 0*N0*a[2] + 0*N0*a[3];
+        for (unsigned int i = 0; i < element.positive_heaviside_triangles_num; i++){
+            const std::array<unsigned char, 3>& triangle = element.triangles[i];
+            TriangleGUI::Renderer::instance().addTriangle(TriangleGUI::TriangleColored{points_positive_heaviside[triangle[0]],
+            points_positive_heaviside[triangle[1]],
+            points_positive_heaviside[triangle[2]],
+        packColor(glm::vec4{0.0f, 1.0f, 0.0f, 1.0f})});
         }
-    }
-    unsigned int idx;
-    for (unsigned int i = 0; i < wn - 1; i++)
-    {
-        for (unsigned int j = 0; j < hn - 1; j++)
+        std::array<glm::vec2, 6> points_negative_heaviside = 
         {
-            idx = j * wn + i;
-            quads.push_back(Quad{vertices_displaced[idx], vertices_displaced[idx + 1], vertices_displaced[idx + wn + 1],
-                                 vertices_displaced[idx + wn], packColor(glm::vec4(1.0f, 0.0f, 0.0f, 1.0f))});
+            points_positive_heaviside[0],
+            points_positive_heaviside[1],
+            points_positive_heaviside[2],
+            points_positive_heaviside[3],
+        };
+        xi = element.intersection_points_local[0].x;
+        eta = element.intersection_points_local[0].y;
+        N0 = (1 - xi) * (1 - eta) / 4.0f;
+        N1 = (1 + xi) * (1 - eta) / 4.0f;
+        N2 = (1 + xi) * (1 + eta) / 4.0f;
+        N3 = (1 - xi) * (1 + eta) / 4.0f;
+        points_negative_heaviside[4] = N0 * points_negative_heaviside[0] + N1 * points_negative_heaviside[1] + N2 * points_negative_heaviside[2] + N3 * points_negative_heaviside[3] +
+        0*N0*a[0] + 0*N1*a[1] -2*N2*a[2] -2*N3*a[3];
+        xi = element.intersection_points_local[1].x;
+        eta = element.intersection_points_local[1].y;
+        N0 = (1 - xi) * (1 - eta) / 4.0f;
+        N1 = (1 + xi) * (1 - eta) / 4.0f;
+        N2 = (1 + xi) * (1 + eta) / 4.0f;
+        N3 = (1 - xi) * (1 + eta) / 4.0f;
+        points_negative_heaviside[5] = N0 * points_negative_heaviside[0] + N1 * points_negative_heaviside[1] + N2 * points_negative_heaviside[2] + N3 * points_negative_heaviside[3] +
+        0*N0*a[0] + 0*N1*a[1]  -2*N2*a[2]  -2*N3*a[3];
+        for (unsigned int i = element.positive_heaviside_triangles_num; i < 4; i++){
+            const std::array<unsigned char, 3>& triangle = element.triangles[i];
+            TriangleGUI::Renderer::instance().addTriangle(TriangleGUI::TriangleColored{points_negative_heaviside[triangle[0]],
+                points_negative_heaviside[triangle[1]],
+                points_negative_heaviside[triangle[2]],
+                packColor(glm::vec4{0.0f, 0.0f, 1.0f, 1.0f})});
         }
+        quads.push_back(Quad{vertices_displaced[element.node_ids[0]], vertices_displaced[element.node_ids[1]], vertices_displaced[element.node_ids[2]],
+                                  vertices_displaced[element.node_ids[3]], packColor(glm::vec4(1.0f, 0.0f, 0.0f, 0.5f))});
+        // break;
     }
+
+    // for (unsigned int i = 0; i < wn - 1; i++)
+    // {
+    //     for (unsigned int j = 0; j < hn - 1; j++)
+    //     {
+    //         idx = j * wn + i;
+    //         quads.push_back(Quad{vertices_displaced[idx], vertices_displaced[idx + 1], vertices_displaced[idx + wn + 1],
+    //                              vertices_displaced[idx + wn], packColor(glm::vec4(1.0f, 0.0f, 0.0f, 1.0f))});
+    //     }
+    // }
 
     for (unsigned int i = 0; i < wn; i++)
     {
@@ -1623,6 +1876,9 @@ quad.vertex_indices[3]}, Ke, triplets, node_offset, node_ndof, 4);
         glVertexAttribPointer(5, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(Quad), (void *)offsetof(Quad, color));
         glVertexAttribDivisor(5, 1);
     }
+
+    
+    TriangleGUI::Renderer::instance().initializeGL();
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -1652,19 +1908,19 @@ quad.vertex_indices[3]}, Ke, triplets, node_offset, node_ndof, 4);
         xfem_shader.use();
         glm::mat4 view = camera.GetViewMatrix();
         glm::mat4 MVP = projection * view;
-        xfem_shader.setMat4("mvp", MVP);
-        xfem_shader.setVec4("color", 1.0f, 0.0f, 0.0f, 1.0f);
-        // glBindVertexArray(VAO);
-        // glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-        // glDrawElements(GL_TRIANGLES, indices.size() * 3, GL_UNSIGNED_INT, (void *)0);
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        if (rectangles.size())
-        {
-            rectangle_shader.use();
-            rectangle_shader.setMat4("mvp", MVP);
-            glBindVertexArray(rectangleVAO);
-            glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, rectangles.size());
-        }
+        // xfem_shader.setMat4("mvp", MVP);
+        // xfem_shader.setVec4("color", 1.0f, 0.0f, 0.0f, 1.0f);
+        // // glBindVertexArray(VAO);
+        // // glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        // // glDrawElements(GL_TRIANGLES, indices.size() * 3, GL_UNSIGNED_INT, (void *)0);
+        // glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        // if (rectangles.size())
+        // {
+        //     rectangle_shader.use();
+        //     rectangle_shader.setMat4("mvp", MVP);
+        //     glBindVertexArray(rectangleVAO);
+        //     glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, rectangles.size());
+        // }
 
         quad_shader.use();
         quad_shader.setMat4("mvp", MVP);
@@ -1684,20 +1940,22 @@ quad.vertex_indices[3]}, Ke, triplets, node_offset, node_ndof, 4);
         glBindVertexArray(lineVAO);
         glDrawElements(GL_LINES, crack_indices.size() * 2, GL_UNSIGNED_INT, (void *)0);
 
-        chain_program.use();
-        chain_program.setMat4("mvp", MVP);
-        glBindVertexArray(chainVAO);
+        // chain_program.use();
+        // chain_program.setMat4("mvp", MVP);
+        // glBindVertexArray(chainVAO);
 
-        if (!firstsStrip.empty())
-        {
-            glMultiDrawArrays(GL_LINE_STRIP, firstsStrip.data(), countsStrip.data(), firstsStrip.size());
-        }
-        if (!firstsLoop.empty())
-        {
-            glMultiDrawArrays(GL_LINE_LOOP, firstsLoop.data(), countsLoop.data(), firstsLoop.size());
-        }
+        // if (!firstsStrip.empty())
+        // {
+        //     glMultiDrawArrays(GL_LINE_STRIP, firstsStrip.data(), countsStrip.data(), firstsStrip.size());
+        // }
+        // if (!firstsLoop.empty())
+        // {
+        //     glMultiDrawArrays(GL_LINE_LOOP, firstsLoop.data(), countsLoop.data(), firstsLoop.size());
+        // }
 
-        glBindVertexArray(0);
+        TriangleGUI::Renderer::instance().draw(MVP);
+        // glBindVertexArray(0);
+        
 
         /* Swap front and back buffers */
         glfwSwapBuffers(window);

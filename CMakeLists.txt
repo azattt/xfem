@@ -19,7 +19,7 @@ add_library(xfem_core STATIC
 )
 target_include_directories(xfem_core PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
-add_executable(xfem main.cpp fem.cpp)
+add_executable(xfem main.cpp fem.cpp gui.cpp)
 target_link_libraries(xfem xfem_core)
 
 target_include_directories(xfem PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -90,7 +90,7 @@ add_dependencies(xfem copy_assets)
 set(xfem CMAKE_BUILD_TYPE=Debug)
 
 if(MSVC)
-  target_compile_options(xfem PRIVATE /W4 -Od -O0 -fno-omit-frame-pointer) #  /O2 /WX  -fsanitize=address
+  target_compile_options(xfem PRIVATE /W4 /Od ) #  /O2 /WX  -fsanitize=address
 else()
   target_compile_options(xfem PRIVATE -Wall -Wextra -Wpedantic) #   -Werror
 endif()
