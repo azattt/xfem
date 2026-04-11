@@ -15,11 +15,25 @@
 
 #include <Eigen/Dense>
 
+#include "levelset.h"
 #include "fem.h"
 #include "gui.h"
 
 #include "camera.h"
 #include "shader.h"
+
+#include <intrin.h>
+bool hasAVX2() {
+    int cpuInfo[4];
+    __cpuid(cpuInfo, 0);
+    int nIds = cpuInfo[0];
+    if (nIds >= 7) {
+        __cpuid(cpuInfo, 7);
+        return (cpuInfo[1] & (1 << 5)) != 0; // EBX bit 5 = AVX2
+    }
+    return false;
+}
+
 
 inline float crossMagnitudeSigned(const glm::vec2 &a, const glm::vec2 &b) noexcept
 {
@@ -339,6 +353,8 @@ else if (profile & GL_CONTEXT_COMPATIBILITY_PROFILE_BIT)
 }
 int main()
 {
+    std::cout << "CPU has AVX2: " << hasAVX2() << std::endl;
+
     std::vector<Circle> circles;
     std::vector<Rectangle> rectangles;
     std::vector<Quad> quads;
@@ -541,6 +557,7 @@ std::vector<std::string> shaderFiles = {
     std::vector<HeavisideEnrichedQuad> heaviside_enriched_quads;
     std::vector<HeavisideEnrichedQuad> tip_enriched_quads;
     std::vector<bool> heaviside_enriched_nodes(vertices.size(), false);
+    /*
     if (!line_segments.empty()){
         LineSegment last_segment = line_segments[line_segments.size() - 1];
         glm::vec2 last_vertex = last_segment.v0 + last_segment.dir;
@@ -1144,6 +1161,42 @@ std::vector<std::string> shaderFiles = {
             }    
         }
     }
+    
+    */
+   
+    QuadMesh mesh;
+    mesh.vertices = std::vector<tinybvh::bvhvec4>();
+    mesh.vertices.reserve(total_vertices);
+
+    for (unsigned int j = 0; j < hn; j++)
+    {
+        for (unsigned int i = 0; i < wn; i++)
+        {
+            mesh.vertices.push_back(tinybvh::bvhvec4{i * wh, j * hh, 0.0f, 0.0f});
+        }
+    }
+
+    mesh.elements = std::vector<QuadElement>();
+    mesh.elements.reserve((hn-1)*(wn-1));
+    for (unsigned int j = 0; j < hn-1; j++)
+    {
+        for (unsigned int i = 0; i < wn-1; i++)
+        {
+            mesh.elements.push_back(QuadElement{
+                j * wn + i,
+                j * wn + i + 1,
+                (j + 1) * wn + i + 1,
+                (j + 1) * wn + i
+            });
+        }
+    }
+    
+    Crack crack;
+    crack.vertices = std::vector<tinybvh::bvhvec2>{{{0.0f, 0.5f}, {0.5f, 0.5f}}};
+    crack.indices = std::vector<CrackLine>{{0, 1}};
+    find_enriched_elements(mesh, crack);
+    
+    return 0;
     const unsigned int num_nodes = vertices.size();
     // heaviside_enriched_quads.clear();
     // heaviside_enriched_nodes.assign(num_nodes, false);
