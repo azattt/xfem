@@ -1165,14 +1165,14 @@ std::vector<std::string> shaderFiles = {
     */
    
     QuadMesh mesh;
-    mesh.vertices = std::vector<tinybvh::bvhvec4>();
+    mesh.vertices = std::vector<Vec3>();
     mesh.vertices.reserve(total_vertices);
 
     for (unsigned int j = 0; j < hn; j++)
     {
         for (unsigned int i = 0; i < wn; i++)
         {
-            mesh.vertices.push_back(tinybvh::bvhvec4{i * wh, j * hh, 0.0f, 0.0f});
+            mesh.vertices.push_back(Vec3{i * wh, j * hh, 0.0f});
         }
     }
 
@@ -1192,7 +1192,7 @@ std::vector<std::string> shaderFiles = {
     }
     
     Crack crack;
-    crack.vertices = std::vector<tinybvh::bvhvec2>{{{0.0f, 0.5f}, {0.5f, 0.5f}}};
+    crack.vertices = std::vector<Vec3>{{{0.0f, 0.5f, 0.0f}, {0.5f, 0.5f, 0.0f}}};
     crack.indices = std::vector<CrackLine>{{0, 1}};
     find_enriched_elements(mesh, crack);
     
