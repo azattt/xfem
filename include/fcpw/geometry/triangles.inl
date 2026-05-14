@@ -1,0 +1,585 @@
+namespace fcpw {
+
+inline Triangle::Triangle()
+{
+    indices[0] = -1;
+    indices[1] = -1;
+    indices[2] = -1;
+    soup = nullptr;
+    pIndex = -1;
+}
+
+inline BoundingBox<3> Triangle::boundingBox() const
+{
+    const Vector3& pa = soup->positions[indices[0]];
+    const Vector3& pb = soup->positions[indices[1]];
+    const Vector3& pc = soup->positions[indices[2]];
+
+    BoundingBox<3> box(pa);
+    box.expandToInclude(pb);
+    box.expandToInclude(pc);
+
+    return box;
+}
+
+inline Vector3 Triangle::centroid() const
+{
+    const Vector3& pa = soup->positions[indices[0]];
+    const Vector3& pb = soup->positions[indices[1]];
+    const Vector3& pc = soup->positions[indices[2]];
+
+    return (pa + pb + pc)/3.0f;
+}
+
+inline float Triangle::surfaceArea() const
+{
+    return 0.5f*normal().norm();
+}
+
+inline float Triangle::signedVolume() const
+{
+    const Vector3& pa = soup->positions[indices[0]];
+    const Vector3& pb = soup->positions[indices[1]];
+    const Vector3& pc = soup->positions[indices[2]];
+
+    return pa.cross(pb).dot(pc)/6.0f;
+}
+
+inline Vector3 Triangle::normal(bool normalize) const
+{
+    const Vector3& pa = soup->positions[indices[0]];
+    const Vector3& pb = soup->positions[indices[1]];
+    const Vector3& pc = soup->positions[indices[2]];
+
+    Vector3 v1 = pb - pa;
+    Vector3 v2 = pc - pa;
+
+    Vector3 n = v1.cross(v2);
+    return normalize ? n.normalized() : n;
+}
+
+inline Vector3 Triangle::normal(int vIndex, int eIndex) const
+{
+    if (soup->vNormals.size() > 0 && vIndex >= 0) {
+        return soup->vNormals[indices[vIndex]];
+    }
+
+    if (soup->eNormals.size() > 0 && eIndex >= 0) {
+        return soup->eNormals[soup->eIndices[3*pIndex + eIndex]];
+    }
+
+    return normal(true);
+}
+
+inline Vector3 Triangle::normal(const Vector2& uv) const
+{
+    int vIndex = -1;
+    if (uv[0] >= oneMinusEpsilon && uv[1] <= epsilon) vIndex = 0; // (1, 0, 0)
+    else if (uv[0] <= epsilon && uv[1] >= oneMinusEpsilon) vIndex = 1; // (0, 1, 0)
+    else if (uv[0] <= epsilon && uv[1] <= epsilon) vIndex = 2; // (0, 0, 1)
+
+    int eIndex = -1;
+    if (vIndex == -1) {
+        if (uv[0] <= epsilon) eIndex = 1; // (0, 1 - w, w)
+        else if (uv[1] <= epsilon) eIndex = 2; // (1 - w, 0, w)
+        else if (uv[0] + uv[1] >= oneMinusEpsilon) eIndex = 0; // (1 - v, v, 0)
+    }
+
+    return normal(vIndex, eIndex);
+}
+
+inline Vector2 Triangle::barycentricCoordinates(const Vector3& p) const
+{
+    const Vector3& pa = soup->positions[indices[0]];
+    const Vector3& pb = soup->positions[indices[1]];
+    const Vector3& pc = soup->positions[indices[2]];
+
+    Vector3 v1 = pb - pa;
+    Vector3 v2 = pc - pa;
+    Vector3 v3 = p - pa;
+
+    float d11 = v1.dot(v1);
+    float d12 = v1.dot(v2);
+    float d22 = v2.dot(v2);
+    float d31 = v3.dot(v1);
+    float d32 = v3.dot(v2);
+    float denom = d11*d22 - d12*d12;
+    float v = (d22*d31 - d12*d32)/denom;
+    float w = (d11*d32 - d12*d31)/denom;
+
+    return Vector2(1.0f - v - w, v);
+}
+
+inline float Triangle::samplePoint(const Vector3& randNums, Vector2& uv, Vector3& p, Vector3& n) const
+{
+    const Vector3& pa = soup->positions[indices[0]];
+    const Vector3& pb = soup->positions[indices[1]];
+    const Vector3& pc = soup->positions[indices[2]];
+
+    n = (pb - pa).cross(pc - pa);
+    float area = n.norm();
+    float u1 = std::sqrt(randNums[1]);
+    float u2 = randNums[2];
+    float u = 1.0f - u1;
+    float v = u2*u1;
+    float w = 1.0f - u - v;
+    uv = Vector2(u, v);
+    p = pa*u + pb*v + pc*w;
+    n /= area;
+
+    return 2.0f/area;
+}
+
+inline Vector2 Triangle::textureCoordinates(const Vector2& uv) const
+{
+    if (soup->tIndices.size() > 0) {
+        const Vector2& pa = soup->textureCoordinates[soup->tIndices[3*pIndex]];
+        const Vector2& pb = soup->textureCoordinates[soup->tIndices[3*pIndex + 1]];
+        const Vector2& pc = soup->textureCoordinates[soup->tIndices[3*pIndex + 2]];
+
+        float u = uv[0];
+        float v = uv[1];
+        float w = 1.0f - u - v;
+
+        return pa*u + pb*v + pc*w;
+    }
+
+    return Vector2(-1, -1);
+}
+
+inline float Triangle::angle(int vIndex) const
+{
+    const Vector3& pa = soup->positions[indices[vIndex]];
+    const Vector3& pb = soup->positions[indices[(vIndex + 1)%3]];
+    const Vector3& pc = soup->positions[indices[(vIndex + 2)%3]];
+
+    Vector3 u = (pb - pa).normalized();
+    Vector3 v = (pc - pa).normalized();
+
+    return std::acos(std::max(-1.0f, std::min(1.0f, u.dot(v))));
+}
+
+inline void Triangle::split(int dim, float splitCoord, BoundingBox<3>& boxLeft,
+                            BoundingBox<3>& boxRight) const
+{
+    for (int i = 0; i < 3; i++) {
+        const Vector3& pa = soup->positions[indices[i]];
+        const Vector3& pb = soup->positions[indices[(i + 1)%3]];
+
+        if (pa[dim] <= splitCoord && pb[dim] <= splitCoord) {
+            const Vector3& pc = soup->positions[indices[(i + 2)%3]];
+
+            if (pc[dim] <= splitCoord) {
+                boxLeft = BoundingBox<3>(pa);
+                boxLeft.expandToInclude(pb);
+                boxLeft.expandToInclude(pc);
+                boxRight = BoundingBox<3>();
+
+            } else {
+                Vector3 u = pa - pc;
+                Vector3 v = pb - pc;
+                float t = std::clamp((splitCoord - pc[dim])/u[dim], 0.0f, 1.0f);
+                float s = std::clamp((splitCoord - pc[dim])/v[dim], 0.0f, 1.0f);
+
+                boxLeft = BoundingBox<3>(pc + u*t);
+                boxLeft.expandToInclude(pc + v*s);
+                boxRight = boxLeft;
+                boxLeft.expandToInclude(pa);
+                boxLeft.expandToInclude(pb);
+                boxRight.expandToInclude(pc);
+            }
+
+            break;
+
+        } else if (pa[dim] >= splitCoord && pb[dim] >= splitCoord) {
+            const Vector3& pc = soup->positions[indices[(i + 2)%3]];
+
+            if (pc[dim] >= splitCoord) {
+                boxRight = BoundingBox<3>(pa);
+                boxRight.expandToInclude(pb);
+                boxRight.expandToInclude(pc);
+                boxLeft = BoundingBox<3>();
+
+            } else {
+                Vector3 u = pa - pc;
+                Vector3 v = pb - pc;
+                float t = std::clamp((splitCoord - pc[dim])/u[dim], 0.0f, 1.0f);
+                float s = std::clamp((splitCoord - pc[dim])/v[dim], 0.0f, 1.0f);
+
+                boxRight = BoundingBox<3>(pc + u*t);
+                boxRight.expandToInclude(pc + v*s);
+                boxLeft = boxRight;
+                boxRight.expandToInclude(pa);
+                boxRight.expandToInclude(pb);
+                boxLeft.expandToInclude(pc);
+            }
+
+            break;
+        }
+    }
+}
+
+inline bool Triangle::intersect(const Ray<3>& r, Interaction<3>& i, bool checkForOcclusion) const
+{
+    // Möller–Trumbore intersection algorithm
+    const Vector3& pa = soup->positions[indices[0]];
+    const Vector3& pb = soup->positions[indices[1]];
+    const Vector3& pc = soup->positions[indices[2]];
+
+    Vector3 v1 = pb - pa;
+    Vector3 v2 = pc - pa;
+    Vector3 p = r.d.cross(v2);
+    float det = v1.dot(p);
+
+    // ray and triangle are parallel if det is close to 0
+    if (std::fabs(det) <= epsilon) return false;
+    float invDet = 1.0f/det;
+
+    Vector3 s = r.o - pa;
+    float v = s.dot(p)*invDet;
+    if (v < 0 || v > 1) return false;
+
+    Vector3 q = s.cross(v1);
+    float w = r.d.dot(q)*invDet;
+    if (w < 0 || v + w > 1) return false;
+
+    float t = v2.dot(q)*invDet;
+    if (t >= 0.0f && t <= r.tMax) {
+        if (checkForOcclusion) return true;
+        i.d = t;
+        i.p = pa + v1*v + v2*w;
+        i.n = v1.cross(v2).normalized();
+        i.uv[0] = 1.0f - v - w;
+        i.uv[1] = v;
+        i.primitiveIndex = pIndex;
+
+        return true;
+    }
+
+    return false;
+}
+
+inline uint32_t signMask(float x)
+{
+    uint32_t u;
+    std::memcpy(&u, &x, sizeof(u));
+    return u & 0x80000000u;
+}
+
+inline float xorf(float x, uint32_t mask)
+{
+    uint32_t u;
+    std::memcpy(&u, &x, sizeof(u));
+    u ^= mask;
+    std::memcpy(&x, &u, sizeof(u));
+    return x;
+};
+
+
+
+inline bool Triangle::intersectRobust(const Ray<3>& r, const RobustIntersectionData<3>& rid, Interaction<3>& i) const
+{
+    // source: Woop, Benthin, Wald. Watertight Ray/Triangle Intersection. JCGT 2013.
+    // calculate vertex coordinates relative to ray origin
+    const Vector3& pa = soup->positions[indices[0]];
+    const Vector3& pb = soup->positions[indices[1]];
+    const Vector3& pc = soup->positions[indices[2]];
+    Vector3 a = pa - r.o;
+    Vector3 b = pb - r.o;
+    Vector3 c = pc - r.o;
+
+    // perform shear and scale of vertex coordinates
+    float ax = a[rid.kx] - rid.Sx*a[rid.kz];
+    float ay = a[rid.ky] - rid.Sy*a[rid.kz];
+    float bx = b[rid.kx] - rid.Sx*b[rid.kz];
+    float by = b[rid.ky] - rid.Sy*b[rid.kz];
+    float cx = c[rid.kx] - rid.Sx*c[rid.kz];
+    float cy = c[rid.ky] - rid.Sy*c[rid.kz];
+
+    // calculate scaled barycentric coordinates
+    float u = cx*by - cy*bx;
+    float v = ax*cy - ay*cx;
+    float w = bx*ay - by*ax;
+
+    // fallback to test against edges using double precision
+    if (u == 0.0f || v == 0.0f || w == 0.0f) {
+        double cxby = (double)cx*(double)by;
+        double cybx = (double)cy*(double)bx;
+        u = (float)(cxby - cybx);
+
+        double axcy = (double)ax*(double)cy;
+        double aycx = (double)ay*(double)cx;
+        v = (float)(axcy - aycx);
+
+        double bxay = (double)bx*(double)ay;
+        double byax = (double)by*(double)ax;
+        w = (float)(bxay - byax);
+    }
+
+    // perform edge tests (no backface culling)
+    if ((u < 0.0f || v < 0.0f || w < 0.0f) &&
+        (u > 0.0f || v > 0.0f || w > 0.0f)) return false;
+
+    // calculate determinant
+    float det = u + v + w;
+    // If the ray is coplanar with the triangle (det == 0)
+    if (det == 0.0f) {
+        // The triangle is seen edge‑on. We need to test if the ray origin
+        // lies inside the triangle in 2D (project onto dominant plane).
+        // Also handle the case where the ray direction is also in the plane.
+        
+        // Step 1: Project the triangle and the ray onto the axis‑aligned plane
+        //         that maximises area (same projection used in the shear).
+        // The shear coefficients (rid.kx, rid.ky, rid.kz) already define the
+        // projection plane (the one perpendicular to the dominant axis of the
+        // triangle normal). We can reuse the projected coordinates (ax, ay, etc.)
+        // but note that when det == 0, all three points are collinear in the
+        // projection? Actually if det == 0, the projected triangle has zero area,
+        // meaning the three points lie on a line. So we need a different approach.
+        
+        // Better: Use the original 3D points and the ray direction.
+        // Since the ray and triangle are coplanar, we can reduce to a 2D
+        // point‑in‑triangle test plus a ray‑segment overlap test.
+        
+        // Find the plane of the triangle (normal n = (b-a) x (c-a))
+        Vector3 n = (pb - pa).cross(pc - pa);
+        // If n is near zero, the triangle is degenerate – skip.
+        if (n.norm() < 1e-8f) return false;
+        
+        // Project onto the plane's dominant axis (largest absolute component)
+        int projAxis = (fabs(n.x()) > fabs(n.y())) ? 
+                    ((fabs(n.x()) > fabs(n.z())) ? 0 : 2) :
+                    ((fabs(n.y()) > fabs(n.z())) ? 1 : 2);
+        
+        // 2D coordinates of triangle vertices
+        Vector2 p2d[3];
+        for (int i = 0; i < 3; ++i) {
+            const Vector3& v = (i == 0) ? pa : (i == 1) ? pb : pc;
+            p2d[i].x() = (projAxis == 0) ? v.y() : (projAxis == 1) ? v.x() : v.x();
+            p2d[i].y() = (projAxis == 0) ? v.z() : (projAxis == 1) ? v.z() : v.y();
+        }
+        
+        // Ray origin in 2D (relative to triangle's plane, but since coplanar,
+        // we can use the same projection)
+        Vector2 ro2d;
+        ro2d.x() = (projAxis == 0) ? r.o.y() : (projAxis == 1) ? r.o.x() : r.o.x();
+        ro2d.y() = (projAxis == 0) ? r.o.z() : (projAxis == 1) ? r.o.z() : r.o.y();
+        
+        // Ray direction in 2D
+        Vector2 rd2d;
+        rd2d.x() = (projAxis == 0) ? r.d.y() : (projAxis == 1) ? r.d.x() : r.d.x();
+        rd2d.y() = (projAxis == 0) ? r.d.z() : (projAxis == 1) ? r.d.z() : r.d.y();
+        
+        // If the ray direction is zero in 2D (degenerate), treat as a point.
+        if (rd2d.x() == 0 && rd2d.y() == 0) {
+            // The ray is a point – test if it lies inside the triangle.
+            if (pointInTriangle2D(ro2d, p2d[0], p2d[1], p2d[2])) {
+                i.d = 0.0f;
+                i.p = r.o;
+                i.n = n.normalized();
+                i.primitiveIndex = pIndex;
+                return true;
+            }
+            return false;
+        }
+        
+        // Compute the intersection of the ray line with the triangle edges.
+        // Because the triangle is 2D, the ray will intersect at most two edges.
+        // We need the interval of t where the ray lies inside the triangle.
+        float tMin = INFINITY, tMax = -INFINITY;
+        bool hit = false;
+        
+        for (int edge = 0; edge < 3; ++edge) {
+            const Vector2& a = p2d[edge];
+            const Vector2& b = p2d[(edge+1)%3];
+            // Solve a + s*(b-a) = ro2d + t*rd2d, s in [0,1], t >= 0
+            Vector2 ab = b - a;
+            Vector2 ro_a = ro2d - a;
+            float denom = rd2d.x() * ab.y() - rd2d.y() * ab.x();
+            if (denom == 0) continue; // parallel edge
+            float t = (ro_a.x() * ab.y() - ro_a.y() * ab.x()) / denom;
+            float s = (ro_a.x() * rd2d.y() - ro_a.y() * rd2d.x()) / denom;
+            if (s >= 0 && s <= 1 && t >= 0) {
+                hit = true;
+                if (t < tMin) tMin = t;
+                if (t > tMax) tMax = t;
+            }
+        }
+        
+        if (hit && tMin <= r.tMax) {
+            // The intersection is the segment [tMin, tMax] intersected with [0, r.tMax].
+            // Typically you'd return the closest hit (tMin).
+            i.d = tMin;
+            i.p = r.o + r.d * tMin;
+            i.n = n.normalized();
+            i.primitiveIndex = pIndex;
+            return true;
+        }
+        return false;
+    }
+
+    // calculate scaled z-coordinates of vertices and
+    // use them to calculate the hit distance
+    float az = rid.Sz*a[rid.kz];
+    float bz = rid.Sz*b[rid.kz];
+    float cz = rid.Sz*c[rid.kz];
+    float t = u*az + v*bz + w*cz;
+
+    uint32_t detSignMask = signMask(det);
+    float tp = xorf(t, detSignMask);
+    float detp = xorf(det, detSignMask);
+    if (tp < 0.0f || tp > r.tMax*detp) return false;
+
+    // normalize u, v, w, and t
+    float invDet = 1.0f/det;
+    u *= invDet;
+    v *= invDet;
+    w *= invDet;
+    t *= invDet;
+
+    // set interaction
+    i.d = t;
+    i.p = pa*u + pb*v + pc*w;
+    Vector3 v1 = pb - pa;
+    Vector3 v2 = pc - pa;
+    i.n = v1.cross(v2).normalized();
+    i.uv[0] = u;
+    i.uv[1] = v;
+    i.primitiveIndex = pIndex;
+
+    return true;
+}
+
+inline int Triangle::intersect(const Ray<3>& r, std::vector<Interaction<3>>& is,
+                               bool checkForOcclusion, bool recordAllHits) const
+{
+    is.clear();
+    Interaction<3> i;
+    bool hit = intersect(r, i, checkForOcclusion);
+
+    if (hit) {
+        if (checkForOcclusion) return 1;
+
+        is.emplace_back(i);
+        return 1;
+    }
+
+    return 0;
+}
+
+inline float findClosestPointTriangle(const Vector3& pa, const Vector3& pb, const Vector3& pc,
+                                      const Vector3& x, Vector3& pt, Vector2& t)
+{
+    // source: real time collision detection
+    // check if x in vertex region outside pa
+    Vector3 ab = pb - pa;
+    Vector3 ac = pc - pa;
+    Vector3 ax = x - pa;
+    float d1 = ab.dot(ax);
+    float d2 = ac.dot(ax);
+    if (d1 <= 0.0f && d2 <= 0.0f) {
+        // barycentric coordinates (1, 0, 0)
+        t[0] = 1.0f;
+        t[1] = 0.0f;
+        pt = pa;
+        return (x - pt).norm();
+    }
+
+    // check if x in vertex region outside pb
+    Vector3 bx = x - pb;
+    float d3 = ab.dot(bx);
+    float d4 = ac.dot(bx);
+    if (d3 >= 0.0f && d4 <= d3) {
+        // barycentric coordinates (0, 1, 0)
+        t[0] = 0.0f;
+        t[1] = 1.0f;
+        pt = pb;
+        return (x - pt).norm();
+    }
+
+    // check if x in vertex region outside pc
+    Vector3 cx = x - pc;
+    float d5 = ab.dot(cx);
+    float d6 = ac.dot(cx);
+    if (d6 >= 0.0f && d5 <= d6) {
+        // barycentric coordinates (0, 0, 1)
+        t[0] = 0.0f;
+        t[1] = 0.0f;
+        pt = pc;
+        return (x - pt).norm();
+    }
+
+    // check if x in edge region of ab, if so return projection of x onto ab
+    float vc = d1*d4 - d3*d2;
+    if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) {
+        // barycentric coordinates (1 - v, v, 0)
+        float v = d1/(d1 - d3);
+        t[0] = 1.0f - v;
+        t[1] = v;
+        pt = pa + ab*v;
+        return (x - pt).norm();
+    }
+
+    // check if x in edge region of ac, if so return projection of x onto ac
+    float vb = d5*d2 - d1*d6;
+    if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) {
+        // barycentric coordinates (1 - w, 0, w)
+        float w = d2/(d2 - d6);
+        t[0] = 1.0f - w;
+        t[1] = 0.0f;
+        pt = pa + ac*w;
+        return (x - pt).norm();
+    }
+
+    // check if x in edge region of bc, if so return projection of x onto bc
+    float va = d3*d6 - d5*d4;
+    if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f) {
+        // barycentric coordinates (0, 1 - w, w)
+        float w = (d4 - d3)/((d4 - d3) + (d5 - d6));
+        t[0] = 0.0f;
+        t[1] = 1.0f - w;
+        pt = pb + (pc - pb)*w;
+        return (x - pt).norm();
+    }
+
+    // x inside face region. Compute pt through its barycentric coordinates (u, v, w)
+    float denom = 1.0f/(va + vb + vc);
+    float v = vb*denom;
+    float w = vc*denom;
+    t[0] = 1.0f - v - w;
+    t[1] = v;
+
+    pt = pa + ab*v + ac*w; //= u*a + v*b + w*c, u = va*denom = 1.0f - v - w
+    return (x - pt).norm();
+}
+
+inline bool Triangle::intersect(const BoundingSphere<3>& s, Interaction<3>& i,
+                                bool recordSurfaceArea) const
+{
+    bool found = findClosestPoint(s, i);
+    if (found) {
+        i.d = recordSurfaceArea ? surfaceArea() : 1.0f;
+        return true;
+    }
+
+    return false;
+}
+
+inline bool Triangle::findClosestPoint(const BoundingSphere<3>& s, Interaction<3>& i) const
+{
+    const Vector3& pa = soup->positions[indices[0]];
+    const Vector3& pb = soup->positions[indices[1]];
+    const Vector3& pc = soup->positions[indices[2]];
+
+    float d = findClosestPointTriangle(pa, pb, pc, s.c, i.p, i.uv);
+    if (d*d <= s.r2) {
+        i.d = d;
+        i.primitiveIndex = pIndex;
+
+        return true;
+    }
+
+    return false;
+}
+
+} // namespace fcpw

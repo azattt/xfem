@@ -2,7 +2,8 @@
 
 
 #include <Eigen/SparseCholesky>
-
+#include <Eigen/src/SparseLU/SparseLU.h>
+#include <Eigen/src/OrderingMethods/Ordering.h>
 
 Eigen::Matrix3d setup_D_matrix(double E, double nu, bool plane_stress)
 {
@@ -134,7 +135,7 @@ namespace LinearQuad
 
 namespace LinearTriangle
 {
-    namespace TriangleSecondRule{
+    namespace Triangle3PointRule{
         std::array<ShapeData, NGauss> precompute_shape_data(){
         std::array<ShapeData, NGauss> data;
         for (int gp = 0; gp < NGauss; gp++){
@@ -210,8 +211,8 @@ namespace LinearTriangle
 }
 
 namespace HeavisideLinearQuad{
-    const std::array<ShapeData, NGauss> shape_data = LinearTriangle::TriangleSecondRule::precompute_shape_data(); // pre‑computed once
-    Eigen::Matrix<double, nStrainTensorComponents, LinearTriangle::nNodes*nDOFperNode> compute_subtriangle_B_matrix(const LinearTriangle::TriangleSecondRule::ShapeData &shape, const LinearTriangle::TriangleSecondRule::JacobianData &jd, int heaviside_func_value)
+    const std::array<ShapeData, NGauss> shape_data = LinearTriangle::Triangle3PointRule::precompute_shape_data(); // pre‑computed once
+    Eigen::Matrix<double, nStrainTensorComponents, LinearTriangle::nNodes*nDOFperNode> compute_subtriangle_B_matrix(const LinearTriangle::Triangle3PointRule::ShapeData &shape, const LinearTriangle::Triangle3PointRule::JacobianData &jd, int heaviside_func_value)
     {
         // For each node, compute global derivatives
         Eigen::Matrix<double, nStrainTensorComponents, LinearTriangle::nNodes*nDOFperNode> B; // epsilon_xx epsilon_yy epsilon_xy
@@ -325,24 +326,28 @@ void addElementSparseUpperStiffness(const LinearQuad::Element& element,
                                     std::vector<Eigen::Triplet<double>>& triplets,
                                     const std::vector<unsigned int>& node_offset,
                                     const std::vector<unsigned int>& node_ndof,
-                                    int max_ndof) {
+                                    int max_ndof,
+                                    std::vector<bool>& active) {
     constexpr int nNodes = 4;
     for (int i = 0; i < nNodes; ++i) {
-        int nodeI = element.node_ids[i];
+        int nodeI = element[i];
         int offI = node_offset[nodeI];
         int ndI = node_ndof[nodeI];
         for (int j = 0; j < nNodes; ++j) {
-            int nodeJ = element.node_ids[j];
+            int nodeJ = element[j];
             int offJ = node_offset[nodeJ];
             int ndJ = node_ndof[nodeJ];
             for (int di = 0; di < ndI; ++di) {
                 int gi = offI + di;
                 for (int dj = 0; dj < ndJ; ++dj) {
                     int gj = offJ + dj;
-                    if (gi <= gj) {   // upper triangle only
+                    if (true || gi <= gj) {   // upper triangle only
                         double val = Ke(i * max_ndof + di, j * max_ndof + dj);
-                        if (std::abs(val) > 1e-15)
+                        if (std::abs(val) > 1e-15){
                             triplets.emplace_back(gi, gj, val);
+                            active[gi] = true;
+                            active[gj] = true;
+                        }
                     }
                 }
             }
@@ -410,7 +415,16 @@ void addElementSparseUpperStiffness(const LinearQuad::Element& element,
     }
 
     Eigen::VectorXd solveSparseSPDUpper(Eigen::SparseMatrix<double> K, Eigen::VectorXd P){
-        Eigen::SimplicialLLT<Eigen::SparseMatrix<double>, Eigen::Upper> LLT(K);
+        // Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> LLT(K);
+        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> LLT(K);
+        std::cout << "Solver info(): " << LLT.info() << std::endl;
+        // Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
+        // solver.analyzePattern(K);
+        // solver.factorize(K);
+        // if (solver.info() != Eigen::Success) {
+        //     std::cerr << "Factorization failed!" << std::endl;
+        //     // fallback or exit
+        // }
         return LLT.solve(P);
     }
 }

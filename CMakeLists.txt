@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.10.0)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 project(xfem VERSION 0.1.0 LANGUAGES C CXX)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -19,7 +19,8 @@ add_library(xfem_core STATIC
 )
 target_include_directories(xfem_core PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
-add_executable(xfem main.cpp fem.cpp gui.cpp tinybvh_builder.cpp levelset.cpp)
+add_executable(xfem main.cpp fem.cpp gui.cpp levelset.cpp
+  Q4.cpp)
 target_link_libraries(xfem xfem_core)
 
 target_include_directories(xfem PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -42,9 +43,6 @@ set_target_properties(glm PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include/glm"
 )
 target_link_libraries(xfem_core glm) 
-
-add_subdirectory(contrib/bvh)
-target_link_libraries(xfem bvh)
 
 # # 1. Создаём импортированную цель для Gmsh DLL
 # add_library(gmsh SHARED IMPORTED)
@@ -90,7 +88,7 @@ add_custom_target(copy_assets
 )
 add_dependencies(xfem copy_assets)
 
-set(xfem CMAKE_BUILD_TYPE=Debug)
+# set(xfem BUILD_TYPE Release)
 
 if(MSVC)
   target_compile_options(xfem PRIVATE /W4 /Od /arch:AVX2) #  mb just AVX /O2 /WX  -fsanitize=address
