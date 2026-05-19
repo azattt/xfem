@@ -420,9 +420,23 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
     for (int i = 0; i < quad_mesh.elements.size(); i++){
         const std::array<int, 4>& element = quad_mesh.elements[i];
         skip = false;
-        if (level_set_fields.vertices_level_set_signs[element[0]].sign == level_set_fields.vertices_level_set_signs[element[1]].sign &&
-                    level_set_fields.vertices_level_set_signs[element[1]].sign == level_set_fields.vertices_level_set_signs[element[2]].sign &&
-                    level_set_fields.vertices_level_set_signs[element[2]].sign == level_set_fields.vertices_level_set_signs[element[3]].sign)
+        // Skip if there is no intersection at the edges; however, do not skip if the sign changes at the opposite nodes.
+        if (level_set_fields.vertices_level_set_signs[element[0]].sign * level_set_fields.vertices_level_set_signs[element[1]].sign >= 0 &&
+            level_set_fields.vertices_level_set_signs[element[1]].sign * level_set_fields.vertices_level_set_signs[element[2]].sign >= 0 &&
+            level_set_fields.vertices_level_set_signs[element[2]].sign * level_set_fields.vertices_level_set_signs[element[3]].sign >= 0 &&
+            level_set_fields.vertices_level_set_signs[element[3]].sign * level_set_fields.vertices_level_set_signs[element[0]].sign >= 0 &&
+            level_set_fields.vertices_level_set_signs[element[0]].sign * level_set_fields.vertices_level_set_signs[element[2]].sign >= 0 &&
+            level_set_fields.vertices_level_set_signs[element[1]].sign * level_set_fields.vertices_level_set_signs[element[3]].sign >= 0
+        )
+        {
+            skip = true;
+        }
+        else if(
+                level_set_fields.vertices_level_set_signs[element[0]].sign * level_set_fields.vertices_level_set_signs[element[2]].sign >= 0 &&
+                (level_set_fields.vertices_level_set_signs[element[1]].tip != 0 || level_set_fields.vertices_level_set_signs[element[3]].tip != 0)  ||
+                level_set_fields.vertices_level_set_signs[element[1]].sign * level_set_fields.vertices_level_set_signs[element[3]].sign >= 0 &&
+                (level_set_fields.vertices_level_set_signs[element[0]].tip != 0 || level_set_fields.vertices_level_set_signs[element[2]].tip != 0) != 0 
+            )
         {
             skip = true;
         }

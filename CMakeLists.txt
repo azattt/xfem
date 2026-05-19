@@ -20,7 +20,9 @@ add_library(xfem_core STATIC
 target_include_directories(xfem_core PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_executable(xfem main.cpp fem.cpp gui.cpp levelset.cpp
-  Q4.cpp)
+  Q4.cpp
+  postprocess.cpp
+  misc.cpp)
 target_link_libraries(xfem xfem_core)
 
 target_include_directories(xfem PRIVATE ${CMAKE_SOURCE_DIR}/include)
