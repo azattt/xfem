@@ -420,8 +420,33 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
     for (int i = 0; i < quad_mesh.elements.size(); i++){
         const std::array<int, 4>& element = quad_mesh.elements[i];
         skip = false;
+        if ((level_set_fields.vertices_level_set_signs[element[0]].sign == 0 +
+            level_set_fields.vertices_level_set_signs[element[1]].sign == 0 +
+            level_set_fields.vertices_level_set_signs[element[2]].sign == 0 +
+            level_set_fields.vertices_level_set_signs[element[3]].sign == 0 ) > 2)
+        {
+            std::cerr << "Warning: maybe multiple cracks in one element (0)" << std::endl;
+        }
+        int crack_within_edge_counter = 0;
+        int edge_with_crack = 0;
+        for (int edge = 0; edge < 4; edge++){
+            if (level_set_fields.vertices_level_set_signs[element[edge]].sign == level_set_fields.vertices_level_set_signs[element[(edge+1)%4]].sign &&
+                level_set_fields.vertices_level_set_signs[element[(edge+1)%4]].sign == 0){
+                crack_within_edge_counter++;      
+                edge_with_crack = edge;
+            }
+        }
+        if (crack_within_edge_counter != 0){
+            if (crack_within_edge_counter > 1){
+                std::cerr << "Warning: maybe multiple cracks in one element (01)" << std::endl;
+            }else{
+                heaviside_enriched_nodes[element[edge_with_crack]] = heaviside_enriched_nodes[element[(edge_with_crack+1)%4]] = 0;
+            }
+            skip = true;
+        }
+
         // Skip if there is no intersection at the edges; however, do not skip if the sign changes at the opposite nodes.
-        if (level_set_fields.vertices_level_set_signs[element[0]].sign * level_set_fields.vertices_level_set_signs[element[1]].sign >= 0 &&
+        else if (level_set_fields.vertices_level_set_signs[element[0]].sign * level_set_fields.vertices_level_set_signs[element[1]].sign >= 0 &&
             level_set_fields.vertices_level_set_signs[element[1]].sign * level_set_fields.vertices_level_set_signs[element[2]].sign >= 0 &&
             level_set_fields.vertices_level_set_signs[element[2]].sign * level_set_fields.vertices_level_set_signs[element[3]].sign >= 0 &&
             level_set_fields.vertices_level_set_signs[element[3]].sign * level_set_fields.vertices_level_set_signs[element[0]].sign >= 0 &&
@@ -437,7 +462,7 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
                 level_set_fields.vertices_level_set_signs[element[1]].sign * level_set_fields.vertices_level_set_signs[element[3]].sign >= 0 &&
                 (level_set_fields.vertices_level_set_signs[element[0]].tip != 0 || level_set_fields.vertices_level_set_signs[element[2]].tip != 0) != 0 
             )
-        {
+        { 
             skip = true;
         }
         else if ((level_set_fields.vertices_level_set_signs[element[0]].tip == -1 && level_set_fields.vertices_level_set_signs[element[1]].tip == -1 &&
@@ -451,6 +476,13 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
         else if ((level_set_fields.vertices_level_set_signs[element[0]].tip == -1) + (level_set_fields.vertices_level_set_signs[element[1]].tip == -1) +
                             (level_set_fields.vertices_level_set_signs[element[3]].tip == -1) +
                             (level_set_fields.vertices_level_set_signs[element[2]].tip == -1) >=
+                        2)
+        {
+            skip = true;
+        }
+        else if ((level_set_fields.vertices_level_set_signs[element[0]].tip == 1) + (level_set_fields.vertices_level_set_signs[element[1]].tip == 1) +
+                            (level_set_fields.vertices_level_set_signs[element[3]].tip == 1) +
+                            (level_set_fields.vertices_level_set_signs[element[2]].tip == 1) >=
                         2)
         {
             skip = true;
@@ -521,76 +553,124 @@ EnrichedElementsTriangulation triangulate_enriched(const QuadMesh& quad_mesh, co
         
         // Heaviside positive triangles first
         std::array<std::array<unsigned char, 3>, 4> tri_indices;
-        int positive_heaviside_triangles_num = 0;
+        short triangles_num = 0;
+        short positive_heaviside_triangles_num = 0;
         polyVerticesCount = 0;
-
+        
+        // the entire polygon is above the crack
         if (heaviside_enriched.intersected_edges[0] == heaviside_enriched.intersected_edges[1]){
             polyVerticesCount = 4;
             poly = {0, 1, 2, 3};
-            positive_heaviside_triangles_num = 2;
+            triangles_num = 2;
             int sign = 0;
+            int current_sign;
+            // iterate through the each vertex of the polygon and check for sign equality
+            int zero_sign_vertex_count = 0;
+            bool non_zero_found = false;
+            bool all_signs_are_equal = true;
             for (unsigned char j = 0; j < polyVerticesCount; j++)
             {
-                sign = level_set_fields.vertices_level_set_signs[element[poly[j]]].sign;
-                if (sign != 0) break;
+                current_sign = level_set_fields.vertices_level_set_signs[element[poly[j]]].sign;
+                if (current_sign != 0) {
+                    if (non_zero_found && sign != current_sign){
+                        all_signs_are_equal = false;
+                    }
+                    sign = current_sign;
+                    non_zero_found = true;
+                }else{
+                    zero_sign_vertex_count++;
+                }
             }
             if (sign == 0) throw std::runtime_error("sign is still zero");
-            if (sign > 0){
-                for (unsigned char j = 1; j < 3; j++)
-                {
-                    tri_indices[j-1] = {poly[0], poly[j], poly[static_cast<unsigned char>(j + 1)]};
-                }
-                for (unsigned char j = 1; j < 3; j++)
-                {
-                    tri_indices[j+1] = {
-                        static_cast<unsigned char>(heaviside_enriched.intersected_edges[0]),
-                        static_cast<unsigned char>(heaviside_enriched.intersected_edges[0]),
-                        static_cast<unsigned char>(heaviside_enriched.intersected_edges[0])
-                    };
-                }
-            }else{
-                for (unsigned char j = 1; j < 3; j++)
-                {
-                    tri_indices[j+1] = {poly[0], poly[j], poly[static_cast<unsigned char>(j + 1)]};
-                }
-                for (unsigned char j = 1; j < 3; j++)
-                {
-                    tri_indices[j-1] = {
-                        static_cast<unsigned char>(heaviside_enriched.intersected_edges[0]),
-                        static_cast<unsigned char>(heaviside_enriched.intersected_edges[0]),
-                        static_cast<unsigned char>(heaviside_enriched.intersected_edges[0])
-                    };
-                }
+            // TODO: add algorithm to find crack intersection with edges 
+            if (!all_signs_are_equal){
+                std::cerr << "Warning: not are signs are equal. Maybe multiple cracks in one element" << std::endl;
             }
-            hvsd_trng.push_back(HeavisideTriangulation{positive_heaviside_triangles_num, tri_indices});
+            if (zero_sign_vertex_count > 2){
+                std::cerr << "Warning: zero_sign_vertex_count > 2. Maybe multiple cracks in one element" << std::endl;
+            }
+            tri_indices[0] = {0, 1, 2};
+            tri_indices[1] = {0, 2, 3};
+            positive_heaviside_triangles_num = sign > 0 ? 2 : 0;
+            hvsd_trng.push_back(HeavisideTriangulation{triangles_num, positive_heaviside_triangles_num, tri_indices});
             continue;
         }
+        short triangle_num = 4;
         for (unsigned char edge = 0; edge < 4; edge++){
             if (heaviside_enriched.intersected_edges[0] == edge){
-                poly[polyVerticesCount++] = edge;
-                poly[polyVerticesCount++] = 4;
-                poly[polyVerticesCount++] = 5;
+                if (level_set_fields.vertices_level_set_signs[element[edge]].sign != 0){
+                    poly[polyVerticesCount++] = 4;
+                }else{
+                    poly[polyVerticesCount++] = edge;
+                    triangle_num--;
+                }
                 edge = heaviside_enriched.intersected_edges[1];
+                if (level_set_fields.vertices_level_set_signs[element[edge]].sign != 0){
+                    poly[polyVerticesCount++] = 5;
+                }else{
+                    poly[polyVerticesCount++] = edge;
+                    triangle_num--;
+                }
             }else{
                 poly[polyVerticesCount++] = edge;
             }
         }
-
         if (polyVerticesCount == 3)
         {
-            if (level_set_fields.vertices_level_set_signs[element[0]].sign > 0){
+            int sign = 0;
+            bool all_signs_are_equal = true;
+            int zero_sign_vertex_count = 0;
+            for (int j = 0; j < 3; j++){
+                if (poly[j] < 4){
+                    if (level_set_fields.vertices_level_set_signs[element[poly[j]]].sign != 0){
+                        if (sign != 0 && level_set_fields.vertices_level_set_signs[element[poly[j]]].sign != sign)
+                            all_signs_are_equal = false;
+                        sign = level_set_fields.vertices_level_set_signs[element[poly[j]]].sign;
+                    }else{
+                        zero_sign_vertex_count++;
+                    }
+                }
+            }
+            if (sign == 0) throw std::runtime_error("sign is still zero  (1)");
+            if (!all_signs_are_equal){
+                std::cerr << "Warning: not are signs are equal. Maybe multiple cracks in one element (1)" << std::endl;
+            }
+            if (zero_sign_vertex_count > 2){
+                std::cerr << "Warning: zero_sign_vertex_count > 2. Maybe multiple cracks in one element (1)" << std::endl;
+            }
+            if (sign > 0){
                 positive_heaviside_triangles_num = 1;
                 tri_indices[0] = {poly[0], poly[1], poly[2]};
             }else{
-                // Turned out that first pass is single negative triangle and we write
-                // it to the end. Thus, there will be 3 positive triangles
-                positive_heaviside_triangles_num = 3;
-                tri_indices[3] = {poly[0], poly[1], poly[2]};
+                // Turned out that first pass is single negative triangle
+                positive_heaviside_triangles_num = triangle_num - 1;
+                tri_indices[positive_heaviside_triangles_num] = {poly[0], poly[1], poly[2]};
             }
         }
         else
         {
-            if (level_set_fields.vertices_level_set_signs[element[0]].sign > 0){
+            int sign = 0;
+            bool all_signs_are_equal = true;
+            int zero_sign_vertex_count = 0;
+            for (int j = 0; j < polyVerticesCount; j++){
+                if (poly[j] < 4){
+                    if (level_set_fields.vertices_level_set_signs[element[poly[j]]].sign != 0){
+                        if (sign != 0 && level_set_fields.vertices_level_set_signs[element[poly[j]]].sign != sign)
+                            all_signs_are_equal = false;
+                        sign = level_set_fields.vertices_level_set_signs[element[poly[j]]].sign;
+                    }else{
+                        zero_sign_vertex_count++;
+                    }
+                }
+            }
+            if (sign == 0) throw std::runtime_error("sign is still zero  (1)");
+            if (!all_signs_are_equal){
+                std::cerr << "Warning: not are signs are equal. Maybe multiple cracks in one element (1)" << std::endl;
+            }
+            if (zero_sign_vertex_count > 2){
+                std::cerr << "Warning: zero_sign_vertex_count > 2. Maybe multiple cracks in one element (1)" << std::endl;
+            }
+            if (sign){
                 // There are more than one positive triangles
                 positive_heaviside_triangles_num = polyVerticesCount - 2;
                 for (unsigned char j = 1; j < polyVerticesCount - 1; j++)
@@ -598,17 +678,22 @@ EnrichedElementsTriangulation triangulate_enriched(const QuadMesh& quad_mesh, co
                     tri_indices[j-1] = {poly[0], poly[j], poly[static_cast<unsigned char>(j + 1)]};
                 }
             }else{
-                // 4 - (polyVerticesCount - 2)
-                positive_heaviside_triangles_num = 6 - polyVerticesCount;
+                // triangle_num - (polyVerticesCount - 2)
+                positive_heaviside_triangles_num = triangle_num - (polyVerticesCount - 2);
                 for (unsigned char j = 1; j < polyVerticesCount - 1; j++)
                 {
                     tri_indices[j+positive_heaviside_triangles_num-1] = {poly[0], poly[j], poly[static_cast<unsigned char>(j + 1)]};
                 }
             }
         }
+        // now we go below crack
         polyVerticesCount = 0;
-        poly[polyVerticesCount++] = 5;
-        poly[polyVerticesCount++] = 4;
+        if (level_set_fields.vertices_level_set_signs[element[heaviside_enriched.intersected_edges[1]]].sign != 0){
+            poly[polyVerticesCount++] = 5;
+        }
+        if (level_set_fields.vertices_level_set_signs[element[heaviside_enriched.intersected_edges[0]]].sign != 0){
+            poly[polyVerticesCount++] = 4;
+        }
         for (int edge = heaviside_enriched.intersected_edges[0] + 1; edge < 4; edge++)
         {
             if (heaviside_enriched.intersected_edges[1] == edge)
@@ -623,35 +708,69 @@ EnrichedElementsTriangulation triangulate_enriched(const QuadMesh& quad_mesh, co
         }
         if (polyVerticesCount == 3)
         {
-            if (level_set_fields.vertices_level_set_signs[element[heaviside_enriched.intersected_edges[1]]].sign > 0){
+            int sign = 0;
+            bool all_signs_are_equal = true;
+            int zero_sign_vertex_count = 0;
+            for (int j = 0; j < polyVerticesCount; j++){
+                if (poly[j] < 4){
+                    if (level_set_fields.vertices_level_set_signs[element[poly[j]]].sign != 0){
+                        if (sign != 0 && level_set_fields.vertices_level_set_signs[element[poly[j]]].sign != sign)
+                            all_signs_are_equal = false;
+                        sign = level_set_fields.vertices_level_set_signs[element[poly[j]]].sign;
+                    }else{
+                        zero_sign_vertex_count++;
+                    }
+                }
+            }
+            if (sign == 0) throw std::runtime_error("sign is still zero  (1)");
+            if (!all_signs_are_equal){
+                std::cerr << "Warning: not are signs are equal. Maybe multiple cracks in one element (1)" << std::endl;
+            }
+            if (zero_sign_vertex_count > 2){
+                std::cerr << "Warning: zero_sign_vertex_count > 2. Maybe multiple cracks in one element (1)" << std::endl;
+            }
+            if (sign > 0){
                 tri_indices[0] = {poly[0], poly[1], poly[2]};
             }else{
-                tri_indices[3] = {poly[0], poly[1], poly[2]};
+                tri_indices[positive_heaviside_triangles_num] = {poly[0], poly[1], poly[2]};
             }
         }
         else
         {
             int sign = 0;
-            for (unsigned char j = 0; j < polyVerticesCount; j++)
-            {
+            bool all_signs_are_equal = true;
+            int zero_sign_vertex_count = 0;
+            for (int j = 0; j < polyVerticesCount; j++){
                 if (poly[j] < 4){
-                    sign = level_set_fields.vertices_level_set_signs[element[poly[j]]].sign;
-                    if (sign != 0) break;
+                    if (level_set_fields.vertices_level_set_signs[element[poly[j]]].sign != 0){
+                        if (sign != 0 && level_set_fields.vertices_level_set_signs[element[poly[j]]].sign != sign)
+                            all_signs_are_equal = false;
+                        sign = level_set_fields.vertices_level_set_signs[element[poly[j]]].sign;
+                    }else{
+                        zero_sign_vertex_count++;
+                    }
                 }
             }
+            if (sign == 0) throw std::runtime_error("sign is still zero  (1)");
+            if (!all_signs_are_equal){
+                std::cerr << "Warning: not are signs are equal. Maybe multiple cracks in one element (1)" << std::endl;
+            }
+            if (zero_sign_vertex_count > 2){
+                std::cerr << "Warning: zero_sign_vertex_count > 2. Maybe multiple cracks in one element (1)" << std::endl;
+            }
             if (sign > 0){
-                for (unsigned char j = 1; j < polyVerticesCount - 1; j++)
+                for (unsigned char j = 0; j < positive_heaviside_triangles_num; j++)
                 {
-                    tri_indices[j-1] = {poly[0], poly[j], poly[static_cast<unsigned char>(j + 1)]};
+                    tri_indices[j] = {poly[0], poly[j+1], poly[static_cast<unsigned char>(j + 2)]};
                 }
             }else{
-                for (unsigned char j = 1; j < polyVerticesCount - 1; j++)
+                for (unsigned char j = 0; j < triangle_num - positive_heaviside_triangles_num; j++)
                 {
-                    tri_indices[j-1+positive_heaviside_triangles_num] = {poly[0], poly[j], poly[static_cast<unsigned char>(j + 1)]};
+                    tri_indices[j+positive_heaviside_triangles_num] = {poly[0], poly[j+1], poly[static_cast<unsigned char>(j + 2)]};
                 }
             }
         }
-        hvsd_trng.push_back(HeavisideTriangulation{positive_heaviside_triangles_num, tri_indices});
+        hvsd_trng.push_back(HeavisideTriangulation{triangle_num, positive_heaviside_triangles_num, tri_indices});
     }
     std::vector<TipTriangulation> tip_trng;
     for (int i = 0; i < enriched_elements.tip_enriched.size(); i++){

@@ -938,10 +938,9 @@ int main()
         percent = static_cast<unsigned int>(100.0 * elementsCreated / elementsTotal);
         if (percent > lastPercent)
         { // чтобы не выводить одно и то же значение много раз
-            std::cout << percent << "%\n";
+            std::cout << percent << "% ";
             lastPercent = percent;
         }
-
         for (int i = 0; i < 4; ++i)
         {
             coordMat(i, 0) = mesh.vertices[element[i]].x();
@@ -999,7 +998,7 @@ int main()
         }
         elementsCreated++;
     }
-
+    std::cout << std::endl;
     auto K = FEMAssemble::createStiffnessFromTriplets(triplets, dof_counter);
 
     constexpr bool disable_output = true;
@@ -1035,10 +1034,10 @@ int main()
         // fixedValues.push_back(0.2);
         // FEMAssemble::fixDOF(K, P, i, UX|UY);
     }
-    for (int i = 1; i < wn; i++)
+    for (int i = 0; i < wn; i++)
     {
         int off = node_offset[(wn * (hn - 1) + i)];
-        P(off + 1) = 100000000;
+        P(off + 1) = 1000;
     }
     // P(10) = 1; 
     // Eigen::JacobiSVD<Eigen::MatrixXd> svd{Eigen::MatrixXd(K)};;

@@ -79,12 +79,14 @@ struct ShapeData
 };
 
 struct HeavisideTriangulation{
-    int positive_heaviside_triangles_num;
+    short triangles_num;
+    short positive_heaviside_triangles_num;
     std::array<std::array<unsigned char, 3>, 4> tri_indices;
 };
 struct TipTriangulation{
     std::array<std::array<unsigned char, 3>, 5> tri_indices;
 };
+
 struct EnrichedElementsTriangulation{
     std::vector<HeavisideTriangulation> heaviside_enriched_triangulation;
     std::vector<TipTriangulation> tip_enriched_triangulation;
