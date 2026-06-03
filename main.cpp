@@ -126,11 +126,6 @@ uint32_t packColor(const glm::vec4 &color)
 
     return (r << 0) | (g << 8) | (b << 16) | (a << 24);
 }
-struct PolygonalChain
-{
-    std::vector<glm::vec2> points;
-    glm::vec4 color;
-};
 // struct PolygonalChainClosed
 // {
 //     std::vector<glm::vec2> points;
@@ -267,9 +262,9 @@ void scroll_callback([[maybe_unused]] GLFWwindow *window, [[maybe_unused]] doubl
 int main()
 {
     std::cout << "CPU has AVX2: " << hasAVX2() << std::endl;
-    std::ifstream mesh_data("mesh.txt");
+    std::ifstream mesh_data("mesh/mesh.txt");
     if (!mesh_data.is_open()){
-        throw std::runtime_error("Couldn't open mesh.txt");
+        throw std::runtime_error("Couldn't open mesh/mesh.txt");
     } 
     double w, h;
     int wn, hn;
@@ -339,9 +334,9 @@ int main()
     
     Crack crack;
 
-    std::ifstream crack_data("crack.txt");
+    std::ifstream crack_data("mesh/crack.txt");
     if (!crack_data.is_open()){
-        throw std::runtime_error("Couldn't open crack.txt");
+        throw std::runtime_error("Couldn't open mesh/crack.txt");
     } 
     double a, b;
     while (!crack_data.eof()){
@@ -465,8 +460,7 @@ int main()
             else if (enriched_element.tip_index == 2){
                 theta = std::atan2(d.dot(crack_tip_2_n), d.dot(crack_tip_2_t)) ;
             }
-            // if (theta < 0)
-            //     theta += 2*3.14159265359;
+            
             sqrt_r = std::sqrt(radius);
             sinhalftheta = std::sin(theta / 2);
             sintheta = std::sin(theta);
@@ -498,11 +492,11 @@ int main()
             //   << local_points[triangle[0]].x << "," << local_points[triangle[0]].y << " ; "
             //   << local_points[triangle[1]].x << "," << local_points[triangle[1]].y << " ; "
             //   << local_points[triangle[2]].x << "," << local_points[triangle[2]].y << "\n";
-            for (unsigned int gp = 0; gp < LinearTriangle::Triangle7PointRule::NGauss; gp++)
+            for (unsigned int gp = 0; gp < LinearTriangle::Triangle13PointRule::NGauss; gp++)
             {
                 B.setZero();
-                double r = LinearTriangle::Triangle7PointRule::gauss_pts[gp][0];
-                double s = LinearTriangle::Triangle7PointRule::gauss_pts[gp][1];
+                double r = LinearTriangle::Triangle13PointRule::gauss_pts[gp][0];
+                double s = LinearTriangle::Triangle13PointRule::gauss_pts[gp][1];
                 double t = 1 - r - s;
                 double xi = local_points[triangle[0]].x() * t + local_points[triangle[1]].x() * r +
                            local_points[triangle[2]].x() * s;
@@ -526,7 +520,7 @@ int main()
                 shape.dN_xi_eta(0, 3) = -0.25 * (1 + eta);
                 shape.dN_xi_eta(1, 3) = 0.25 * (1 - xi);
 
-                LinearTriangle::Triangle7PointRule::JacobianData jd;
+                LinearTriangle::Triangle13PointRule::JacobianData jd;
                 jd.J = shape.dN_xi_eta * coords;
                 bool invertible;
                 jd.J.computeInverseAndDetWithCheck(jd.invJ, jd.detJ, invertible, 1e-12);
@@ -560,8 +554,7 @@ int main()
                 else if (enriched_element.tip_index == 2){
                     theta = std::atan2(d.dot(crack_tip_2_n), d.dot(crack_tip_2_t)) ;
                 }
-                // if (theta < 0)
-                //     theta += 2*3.14159265359;
+
                 sqrt_r = std::sqrt(radius);
                 sinhalftheta = std::sin(theta / 2);
                 sintheta = std::sin(theta);
@@ -582,8 +575,28 @@ int main()
 
                 drdx = (radius > 1e-12) ? d.x() / radius : 0.0;
                 drdy = (radius > 1e-12) ? d.y() / radius : 0.0;
-                dthetadx = (radius > 1e-12) ? -d.y() / (radius2) : 0.0;
-                dthetady = (radius > 1e-12) ?  d.x() / (radius2) : 0.0;
+                if (enriched_element.tip_index == 1){
+                    double a = d.dot(crack_tip_1_t);   // distance along tangent
+                    double b = d.dot(crack_tip_1_n);   // distance along normal
+                    double r2 = a*a + b*b;
+                    if (r2 > 1e-12) {
+                        dthetadx = (a * crack_tip_1_n.x() - b * crack_tip_1_t.x()) / r2;
+                        dthetady = (a * crack_tip_1_n.y() - b * crack_tip_1_t.y()) / r2;
+                    } else {
+                        dthetadx = dthetady = 0.0;
+                    }
+                }
+                else if (enriched_element.tip_index == 2){
+                    double a = d.dot(crack_tip_2_t);   // distance along tangent
+                    double b = d.dot(crack_tip_2_n);   // distance along normal
+                    double r2 = a*a + b*b;
+                    if (r2 > 1e-12) {
+                        dthetadx = (a * crack_tip_2_n.x() - b * crack_tip_2_t.x()) / r2;
+                        dthetady = (a * crack_tip_2_n.y() - b * crack_tip_2_t.y()) / r2;
+                    } else {
+                        dthetadx = dthetady = 0.0;
+                    }
+                }
 
                 for (int a = 0; a < 4; ++a) {
                     df_dx[a].x() = dfdr[a] * drdx + dfdtheta[a] * dthetadx;
@@ -606,25 +619,6 @@ int main()
                     // f_alpha
                     for (int a = 0; a < 4; a++)
                     {
-                        // Eigen::Vector2d dn = coords.row(n).transpose() - tip_point_global_coords;
-                        // double rn = dn.norm();
-                        // double thetan = 0;
-                        // if (enriched_element.tip_index == 1){
-                        //     thetan = std::atan2(d.dot(crack_tip_1_oy), d.dot(crack_tip_1_ox)) ;
-                        // }
-                        // else if (enriched_element.tip_index == 2){
-                        //     thetan = std::atan2(d.dot(crack_tip_2_oy), d.dot(crack_tip_2_ox)) ;
-                        // }
-
-                        // double sqrt_rn = sqrt(rn);
-
-                        // std::array<double,4> f_node = {
-                        //     sqrt_rn * sin(theta/2),
-                        //     sqrt_rn * cos(theta/2),
-                        //     sqrt_rn * sin(theta) * sin(theta/2),
-                        //     sqrt_rn * sin(theta) * cos(theta/2)
-                        // };
-
                         shift = f[a] - f_nodes[n][a];
                         B(0, 10 * n + 2 + 2 * a) = dNdx * shift + Nn * df_dx[a].x(); // du/dx
                         B(0, 10 * n + 3 + 2 * a) = 0;
@@ -635,13 +629,13 @@ int main()
                     }
                 }
                 factor =
-                    LinearTriangle::Triangle7PointRule::gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
+                    LinearTriangle::Triangle13PointRule::gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
                 if (det_tri < 0)
                     std::cout << "det_tri < 0" << std::endl;
                 if (jd.detJ < 0)
                     std::cout << "jd.detJ < 0" << std::endl;
                 Ke += factor * (B.transpose() * D * B);
-                total_area += LinearTriangle::Triangle7PointRule::gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
+                total_area += LinearTriangle::Triangle13PointRule::gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
                 Eigen::VectorXd rigid_x(40);
                 rigid_x.setZero();
                 for (int i = 0; i < 4; ++i) rigid_x(10*i) = 1.0;   // standard u_x = 1
@@ -760,7 +754,6 @@ int main()
     // heaviside elements
     for (int i = 0; i < enriched_elements.heaviside_enriched.size(); i++)
     {
-        continue;
         const auto &enriched_element = enriched_elements.heaviside_enriched[i];
         const std::array<int, 4> &element = mesh.elements[enriched_element.id];
         const HeavisideTriangulation &triangulation =
@@ -792,7 +785,7 @@ int main()
         }
         // Eigen::Matrix2f J_xy_xieta = shape.dN_xi_eta * coords;
         double total_area = 0.0;
-        for (unsigned int j = 0; j < 4; j++)
+        for (unsigned int j = 0; j < triangulation.triangles_num; j++)
         {
 
             const std::array<unsigned char, 3> &triangle = triangulation.tri_indices[j];
@@ -809,10 +802,10 @@ int main()
             //   << local_points[triangle[0]].x << "," << local_points[triangle[0]].y << " ; "
             //   << local_points[triangle[1]].x << "," << local_points[triangle[1]].y << " ; "
             //   << local_points[triangle[2]].x << "," << local_points[triangle[2]].y << "\n";
-            for (unsigned int gp = 0; gp < LinearTriangle::Triangle3PointRule::NGauss; gp++)
+            for (unsigned int gp = 0; gp < LinearTriangle::Triangle13PointRule::NGauss; gp++)
             {
-                float r = LinearTriangle::Triangle3PointRule::gauss_pts[gp][0];
-                float s = LinearTriangle::Triangle3PointRule::gauss_pts[gp][1];
+                float r = LinearTriangle::Triangle13PointRule::gauss_pts[gp][0];
+                float s = LinearTriangle::Triangle13PointRule::gauss_pts[gp][1];
                 float t = 1 - r - s;
                 float xi = local_points[triangle[0]].x() * t + local_points[triangle[1]].x() * r +
                            local_points[triangle[2]].x() * s;
@@ -835,7 +828,7 @@ int main()
                 shape.N[3] = 0.25 * (1 - xi) * (1 + eta);
                 shape.dN_xi_eta(0, 3) = -0.25 * (1 + eta);
                 shape.dN_xi_eta(1, 3) = 0.25 * (1 - xi);
-                LinearTriangle::Triangle3PointRule::JacobianData jd;
+                LinearTriangle::Triangle13PointRule::JacobianData jd;
                 // Initialize to zero
                 // std::cout << coords << std::endl;
                 // std::cout << shape.dN_xi_eta << std::endl;
@@ -865,7 +858,7 @@ int main()
                     B(2, 4 * i + 3) = dN_dx_dy(0, i) * shifted_factor; // du/dy
                 }
                 double factor =
-                    LinearTriangle::Triangle3PointRule::gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
+                    LinearTriangle::Triangle13PointRule::gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
                 if (det_tri < 0)
                     std::cout << "det_tri < 0" << std::endl;
                 if (jd.detJ < 0)
@@ -1174,8 +1167,10 @@ int main()
     }
 
     drawHeavisideElements(enriched_elements.heaviside_enriched, mesh, enriched_elements_triangulation.heaviside_enriched_triangulation,
-    level_set_fields.vertices_level_set_signs, u, node_offset, vertices_displaced);
-    
+    level_set_fields.vertices_level_set_signs, u, node_offset, enriched_elements.heaviside_enriched_nodes, scale);
+    drawTipElements(enriched_elements.tip_enriched, mesh, enriched_elements_triangulation.tip_enriched_triangulation,
+    level_set_fields.vertices_level_set_signs, u, node_offset, enriched_elements.tip_enriched_nodes, scale, polygonal_chains,
+crack_tip_1_t, crack_tip_1_n, crack_tip_2_t, crack_tip_2_n);
     unsigned int idx;
     for (int i = 0; i < wn; i++)
     {
@@ -1447,7 +1442,7 @@ int main()
         }
 
         TriangleGUI::Renderer::instance().draw(MVP);
-        // glBindVertexArray(0);
+        glBindVertexArray(0);
 
         /* Swap front and back buffers */
         glfwSwapBuffers(window);

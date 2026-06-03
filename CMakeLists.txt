@@ -23,6 +23,7 @@ add_executable(xfem main.cpp fem.cpp gui.cpp levelset.cpp
   Q4.cpp
   postprocess.cpp
   misc.cpp)
+
 target_link_libraries(xfem xfem_core)
 
 target_include_directories(xfem PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -38,6 +39,8 @@ if(WIN32)
 elseif(UNIX)
     target_link_libraries(xfem_core glfw m pthread dl X11)
 endif()
+
+
 
 add_library(glm STATIC IMPORTED) # or STATIC instead of SHARED
 set_target_properties(glm PROPERTIES
@@ -88,7 +91,11 @@ target_precompile_headers(xfem PRIVATE
 add_custom_target(copy_assets
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_LIST_DIR}/shaders ${CMAKE_BINARY_DIR}/shaders
 )
-add_dependencies(xfem copy_assets)
+add_custom_target(copy_mesh
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_LIST_DIR}/mesh ${CMAKE_BINARY_DIR}/mesh
+)
+add_dependencies(xfem copy_assets copy_mesh)
+
 
 # set(xfem BUILD_TYPE Release)
 
