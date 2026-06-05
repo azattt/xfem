@@ -22,7 +22,8 @@ target_include_directories(xfem_core PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_executable(xfem main.cpp fem.cpp gui.cpp levelset.cpp
   Q4.cpp
   postprocess.cpp
-  misc.cpp)
+  misc.cpp
+  BC.cpp)
 
 target_link_libraries(xfem xfem_core)
 

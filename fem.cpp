@@ -212,7 +212,7 @@ namespace LinearTriangle
 
 namespace HeavisideLinearQuad{
     const std::array<ShapeData, NGauss> shape_data = LinearTriangle::Triangle3PointRule::precompute_shape_data(); // pre‑computed once
-    Eigen::Matrix<double, nStrainTensorComponents, LinearTriangle::nNodes*nDOFperNode> compute_subtriangle_B_matrix(const LinearTriangle::Triangle3PointRule::ShapeData &shape, const LinearTriangle::Triangle3PointRule::JacobianData &jd, int heaviside_func_value)
+    Eigen::Matrix<double, nStrainTensorComponents, LinearTriangle::nNodes*nDOFperNode> compute_subtriangle_B_matrix(const ShapeData &shape, const JacobianData &jd, int heaviside_func_value)
     {
         // For each node, compute global derivatives
         Eigen::Matrix<double, nStrainTensorComponents, LinearTriangle::nNodes*nDOFperNode> B; // epsilon_xx epsilon_yy epsilon_xy
@@ -314,12 +314,40 @@ namespace HeavisideLinearQuad{
 // }
 namespace FEMAssemble{
 
-    // for symmetric matrices
-    std::vector<Eigen::Triplet<double>> createTripletsUpperStiffness(unsigned int nElements, unsigned int nHeavisideEnriched){
-        std::vector<Eigen::Triplet<double>> triplets;
-        triplets.reserve(nElements*dofPerElement*(dofPerElement+1)/2 + nHeavisideEnriched*4*(4+1)/2);
-        return triplets;
-    } 
+// for symmetric matrices
+std::vector<Eigen::Triplet<double>> createTripletsUpperStiffness(unsigned int nElements, unsigned int nHeavisideEnriched){
+    std::vector<Eigen::Triplet<double>> triplets;
+    triplets.reserve(nElements*dofPerElement*(dofPerElement+1)/2 + nHeavisideEnriched*4*(4+1)/2);
+    return triplets;
+} 
+
+template <typename MatrixType>
+void checkLocalKePSD(const MatrixType& Ke, const std::string& name)
+{
+    Eigen::MatrixXd Ksym = 0.5 * (Eigen::MatrixXd(Ke) + Eigen::MatrixXd(Ke).transpose());
+
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(Ksym);
+
+    if (es.info() != Eigen::Success) {
+        std::cout << name << ": eigen decomposition failed\n";
+        return;
+    }
+
+    double minEig = es.eigenvalues().minCoeff();
+    double maxEig = es.eigenvalues().maxCoeff();
+
+    double tol = 1e-10 * std::max(1.0, std::abs(maxEig));
+
+    std::cout << name << " min eigenvalue = " << minEig << "\n";
+    std::cout << name << " max eigenvalue = " << maxEig << "\n";
+    std::cout << name << " tol = " << tol << "\n";
+
+    if (minEig < -tol) {
+        std::cout << name << " is NOT positive semidefinite\n";
+    } else {
+        std::cout << name << " is positive semidefinite within tolerance\n";
+    }
+}
 
 void addElementSparseUpperStiffness(const LinearQuad::Element& element,
                                     const Eigen::MatrixXd &Ke,
@@ -328,6 +356,16 @@ void addElementSparseUpperStiffness(const LinearQuad::Element& element,
                                     const std::vector<unsigned int>& node_ndof,
                                     int max_ndof,
                                     std::vector<bool>& active) {
+    Eigen::MatrixXd diff = Ke - Ke.transpose();
+    double absDiff = (Ke - Ke.transpose()).cwiseAbs().maxCoeff();
+    double maxVal = Ke.cwiseAbs().maxCoeff();
+    double relDiff = absDiff / std::max(maxVal, 1.0);
+
+    // std::cout << "Ke symmetry abs diff = " << absDiff << std::endl;
+    // std::cout << "Ke symmetry rel diff = " << relDiff << std::endl;
+    // checkLocalKePSD(Ke, "Ke");
+    // std::cout << std::endl;
+
     constexpr int nNodes = 4;
     for (int i = 0; i < nNodes; ++i) {
         int nodeI = element[i];
@@ -341,7 +379,7 @@ void addElementSparseUpperStiffness(const LinearQuad::Element& element,
                 int gi = offI + di;
                 for (int dj = 0; dj < ndJ; ++dj) {
                     int gj = offJ + dj;
-                    if (true || gi <= gj) {   // upper triangle only
+                    if (gi <= gj) {   // upper triangle only
                         double val = Ke(i * max_ndof + di, j * max_ndof + dj);
                         if (std::abs(val) > 1e-15){
                             triplets.emplace_back(gi, gj, val);
@@ -414,17 +452,36 @@ void addElementSparseUpperStiffness(const LinearQuad::Element& element,
         K.makeCompressed();
     }
 
+    bool isSymmetric(const Eigen::SparseMatrix<double>& A, double tol = 1e-7) {
+    for (int k = 0; k < A.outerSize(); ++k) {
+        for (Eigen::SparseMatrix<double>::InnerIterator it(A, k); it; ++it) {
+            int i = it.row();
+            int j = it.col();
+            if (i != j) {
+                double val = it.value();
+                // Ищем симметричный элемент (j,i)
+                double sym_val = A.coeff(j, i);
+                if (std::abs(val - sym_val) > tol * std::max(1.0, std::abs(val))) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
     Eigen::VectorXd solveSparseSPDUpper(Eigen::SparseMatrix<double> K, Eigen::VectorXd P){
-        // Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> LLT(K);
-        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> LLT(K);
-        std::cout << "Solver info(): " << LLT.info() << std::endl;
+        std::cout << "isSymmetric(K): " << isSymmetric(K) << std::endl;
+
+        // Eigen::SimplicialLLT<Eigen::SparseMatrix<double>, Eigen::Upper> solver(K);
+        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>, Eigen::Upper> solver(K);
         // Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
-        // solver.analyzePattern(K);
-        // solver.factorize(K);
-        // if (solver.info() != Eigen::Success) {
-        //     std::cerr << "Factorization failed!" << std::endl;
-        //     // fallback or exit
-        // }
-        return LLT.solve(P);
+        solver.analyzePattern(K);
+        solver.factorize(K);
+        std::cout << "Solver info(): " << solver.info() << std::endl;
+        if (solver.info() != Eigen::Success) {
+            std::cerr << "Factorization failed!" << std::endl;
+        }
+        return solver.solve(P);
     }
 }

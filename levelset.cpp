@@ -361,22 +361,54 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
             int intersected_edge = -1;
             Eigen::Vector<double, 2> tip_local_coords;
             bool found = false;
-            for (int edge = 0; edge < 4; edge++){
-                if (level_set_fields.vertices_level_set_signs[element[edge]].tip == -1 && level_set_fields.vertices_level_set_signs[element[edge]].tip == level_set_fields.vertices_level_set_signs[element[(edge + 1)%4]].tip
-                && level_set_fields.vertices_level_set_signs[element[edge]].sign*level_set_fields.vertices_level_set_signs[element[(edge+1)%4]].sign < 0){
-                    if (found) throw std::runtime_error("already found");
-                    const int opposite_edge = (edge + 2)%4;
-                    const double coord = (level_set_fields.level_set_1_signed_dist[element[opposite_edge]]+level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]])/(level_set_fields.level_set_1_signed_dist[element[opposite_edge]]-level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]]); 
-                    intersection_point_local_coords = Eigen::Vector<double, 2>{
-                        (opposite_edge == 0)*coord+(opposite_edge == 1)*(1)+(opposite_edge == 2)*(-coord)+(opposite_edge == 3)*(-1),
-                        (opposite_edge == 1)*coord+(opposite_edge == 2)*(1)+(opposite_edge == 3)*(-coord)+(opposite_edge == 0)*(-1)
-                    };
-                    inverseMapping(crack_tip_1_vertex, {quad_mesh.vertices[element[0]], quad_mesh.vertices[element[1]], quad_mesh.vertices[element[2]], quad_mesh.vertices[element[3]]}, tip_local_coords);
-                    intersected_edge = opposite_edge;
-                    found = true;
-                    // intersection_point_local_coords = interpolate(quad_mesh.vertices[element[opposite_edge]], quad_mesh.vertices[element[(opposite_edge+1)%4]], level_set_fields.level_set_1_signed_dist[element[opposite_edge]],
-                    //                                             level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]]); 
+            double min_dist = std::abs(level_set_fields.level_set_1_signed_dist[element[0]]);
+            int min_node = 0;
+            for (int node = 0; node < 4; node++){
+                if (level_set_fields.level_set_1_signed_dist[element[node]] < min_dist){
+                    min_node = node;
+                    min_dist = std::abs(level_set_fields.level_set_1_signed_dist[element[node]]);
                 }
+            }
+            int min_edge = 0;
+            if (level_set_fields.vertices_level_set_signs[element[min_node]].sign > 0){
+                min_edge = (min_node + 3 ) % 4;
+            }else{
+                min_edge = min_node;
+            }
+            int found_edge = -1;
+            for (int edge = 0; edge < 4; edge++){
+                if (level_set_fields.vertices_level_set_signs[element[edge]].tip == 1 && level_set_fields.vertices_level_set_signs[element[edge]].tip == level_set_fields.vertices_level_set_signs[element[(edge + 1)%4]].tip
+                && level_set_fields.vertices_level_set_signs[element[edge]].sign*level_set_fields.vertices_level_set_signs[element[(edge+1)%4]].sign < 0
+                ){
+                    const int opposite_edge = (edge + 2)%4;
+                    if (!(level_set_fields.vertices_level_set_signs[element[opposite_edge]].sign*level_set_fields.vertices_level_set_signs[element[(opposite_edge+1)%4]].sign < 0)){
+                        continue;         
+                    }
+                    if (found_edge != -1){
+                        found_edge = -1;
+                        break;
+                    }
+                    found_edge = edge;
+                }
+            }
+            // try another criteria
+            if (found_edge == -1){
+                found_edge = min_edge;
+            }
+            if (found_edge != -1){
+                const int opposite_edge = (found_edge + 2)%4;
+                if (!(level_set_fields.vertices_level_set_signs[element[opposite_edge]].sign*level_set_fields.vertices_level_set_signs[element[(opposite_edge+1)%4]].sign < 0)){
+                    continue;         
+                }
+                if (found) throw std::runtime_error("already found");
+                const double coord = (level_set_fields.level_set_1_signed_dist[element[opposite_edge]]+level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]])/(level_set_fields.level_set_1_signed_dist[element[opposite_edge]]-level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]]); 
+                intersection_point_local_coords = Eigen::Vector<double, 2>{
+                    (opposite_edge == 0)*coord+(opposite_edge == 1)*(1)+(opposite_edge == 2)*(-coord)+(opposite_edge == 3)*(-1),
+                    (opposite_edge == 1)*coord+(opposite_edge == 2)*(1)+(opposite_edge == 3)*(-coord)+(opposite_edge == 0)*(-1)
+                };
+                inverseMapping(crack_tip_1_vertex, {quad_mesh.vertices[element[0]], quad_mesh.vertices[element[1]], quad_mesh.vertices[element[2]], quad_mesh.vertices[element[3]]}, tip_local_coords);
+                intersected_edge = opposite_edge;
+                found = true;
             }
             if (!found) throw std::runtime_error("not found");
             tip_enriched.push_back(TipEnriched{i, intersection_point_local_coords, tip_local_coords,  static_cast<unsigned char>(intersected_edge), 1});
@@ -410,10 +442,14 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
                 if (level_set_fields.vertices_level_set_signs[element[edge]].tip == 1 && level_set_fields.vertices_level_set_signs[element[edge]].tip == level_set_fields.vertices_level_set_signs[element[(edge + 1)%4]].tip
                 && level_set_fields.vertices_level_set_signs[element[edge]].sign*level_set_fields.vertices_level_set_signs[element[(edge+1)%4]].sign < 0
                 ){
-                // if (level_set_fields.vertices_level_set_signs[element[edge]].sign * level_set_fields.vertices_level_set_signs[element[(edge+1)%4]].sign < 0){
-                // if (level_set_fields.vertices_level_set_signs[element[edge]].sign * level_set_fields.vertices_level_set_signs[element[(edge+1)%4]].sign < 0
-                //     && (level_set_fields.vertices_level_set_signs[element[edge]].tip == -1 || level_set_fields.vertices_level_set_signs[element[(edge+1)%4]].tip == -1)
-                // || (edge == min_edge)){
+                    const int opposite_edge = (edge + 2)%4;
+                    if (!(level_set_fields.vertices_level_set_signs[element[opposite_edge]].sign*level_set_fields.vertices_level_set_signs[element[(opposite_edge+1)%4]].sign < 0)){
+                        continue;         
+                    }
+                    if (found_edge != -1){
+                        found_edge = -1;
+                        break;
+                    }
                     found_edge = edge;
                 }
             }
@@ -422,7 +458,6 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
                 found_edge = min_edge;
             }
             if (found_edge != -1){
-                if (found) throw std::runtime_error("already found");
                 const int opposite_edge = (found_edge + 2)%4;
                 const double coord = (level_set_fields.level_set_1_signed_dist[element[opposite_edge]]+level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]])/(level_set_fields.level_set_1_signed_dist[element[opposite_edge]]-level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]]); 
                 intersection_point_local_coords = Eigen::Vector<double, 2>{
@@ -432,8 +467,6 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
                 inverseMapping(crack_tip_2_vertex, {quad_mesh.vertices[element[0]], quad_mesh.vertices[element[1]], quad_mesh.vertices[element[2]], quad_mesh.vertices[element[3]]}, tip_local_coords);
                 found = true;
                 intersected_edge = opposite_edge;
-                // intersection_point_local_coords = interpolate(quad_mesh.vertices[element[opposite_edge]], quad_mesh.vertices[element[(opposite_edge+1)%4]], level_set_fields.level_set_1_signed_dist[element[opposite_edge]],
-                //                                             level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]]); 
             }
             if (!found) throw std::runtime_error("not found");
             tip_enriched.push_back(TipEnriched{i, intersection_point_local_coords, tip_local_coords, static_cast<unsigned char>(intersected_edge), 2});

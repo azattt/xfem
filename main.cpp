@@ -21,6 +21,8 @@
 #include "levelset.h"
 #include "postprocess.h"
 
+#include "BC.h"
+
 #include "misc.h"
 
 #include "camera.h"
@@ -339,19 +341,33 @@ int main()
         throw std::runtime_error("Couldn't open mesh/crack.txt");
     } 
     double a, b;
-    while (!crack_data.eof()){
-        crack_data >> a;
-        crack_data >> b;
-        crack.vertices.push_back(Eigen::Vector<double, 2>(a, b));
+    while (crack_data >> a >> b) {
+        crack.vertices.push_back(Eigen::Vector2d(a, b));
+    }
+    if (crack.vertices.size() < 2) {
+        throw std::runtime_error("Crack must contain at least two points");
     }
     for (int i = 1; i < crack.vertices.size(); i++){
         crack.indices.push_back(CrackSegment{i-1, i});
     }
-
-    Eigen::Vector2d first_crack_segment = (crack.vertices[crack.indices[crack.indices.size()-1].v0] -
-    crack.vertices[crack.indices[crack.indices.size()-1].v1]);
+    bool disable_output = true;
+    std::ifstream disable_output_data("mesh/disable_output.txt");
+    if (!disable_output_data.is_open()){
+        std::cerr << "Couldn't open mesh/disable_output.txt. disable_output set to true." << std::endl;
+    }else{
+        disable_output_data >> disable_output;
+    }
+    bool disable_debug_output = true;
+    std::ifstream disable_debug_output_data("mesh/disable_debug_output.txt");
+    if (!disable_debug_output_data.is_open()){
+        std::cerr << "Couldn't open mesh/disable_debug_output.txt. disable_debug_output set to true." << std::endl;
+    }else{
+        disable_debug_output_data >> disable_debug_output;
+    }
+    Eigen::Vector2d first_crack_segment = (crack.vertices[crack.indices[0].v0] -
+    crack.vertices[crack.indices[0].v1]);
     Eigen::Vector2d crack_tip_1_t = first_crack_segment.normalized();
-    Eigen::Vector2d crack_tip_1_n = Eigen::Vector2d{crack_tip_1_t.y(), -crack_tip_1_t.x()};
+    Eigen::Vector2d crack_tip_1_n = Eigen::Vector2d{-crack_tip_1_t.y(), crack_tip_1_t.x()};
 
     Eigen::Vector2d last_crack_segment = (crack.vertices[crack.indices[crack.indices.size()-1].v1] -
     crack.vertices[crack.indices[crack.indices.size()-1].v0]);
@@ -520,7 +536,7 @@ int main()
                 shape.dN_xi_eta(0, 3) = -0.25 * (1 + eta);
                 shape.dN_xi_eta(1, 3) = 0.25 * (1 - xi);
 
-                LinearTriangle::Triangle13PointRule::JacobianData jd;
+                LinearTriangle::JacobianData jd;
                 jd.J = shape.dN_xi_eta * coords;
                 bool invertible;
                 jd.J.computeInverseAndDetWithCheck(jd.invJ, jd.detJ, invertible, 1e-12);
@@ -636,14 +652,17 @@ int main()
                     std::cout << "jd.detJ < 0" << std::endl;
                 Ke += factor * (B.transpose() * D * B);
                 total_area += LinearTriangle::Triangle13PointRule::gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
+                if (!disable_debug_output){
                 Eigen::VectorXd rigid_x(40);
                 rigid_x.setZero();
                 for (int i = 0; i < 4; ++i) rigid_x(10*i) = 1.0;   // standard u_x = 1
-                Eigen::VectorXd strain = B * rigid_x;   // but B is not available after assembly; we need to compute
-                // it again or store
-                // Instead, compute the residual Ke * rigid_x
-                Eigen::VectorXd res = Ke * rigid_x;
-                std::cout << "Norm of Ke * rigid_x: " << res.norm() << std::endl;  // should be near 0
+                    Eigen::VectorXd strain = B * rigid_x;   // but B is not available after assembly; we need to compute
+                    // it again or store
+                    // Instead, compute the residual Ke * rigid_x
+                    Eigen::VectorXd res = Ke * rigid_x;
+                
+                    std::cout << "Norm of Ke * rigid_x: " << res.norm() << std::endl;  // should be near 0
+                }
             }
         }
         // Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 16, 16>> es(Ke);
@@ -696,12 +715,12 @@ int main()
                                                     Ke_expanded, triplets, node_offset, node_ndof, 12, active);
             // std::cout << "expanded\n" << Ke_expanded << std::endl;
             // std::cout << "not expanded\n" << Ke << std::endl;
-            std::ofstream tmp_file("tip_enriched.txt");
-            tmp_file << Ke_expanded;
-            tmp_file.close();
-            std::ofstream tmp_file2("tip_enriched2.txt");
-            tmp_file2 << Ke;
-            tmp_file2.close();
+            // std::ofstream tmp_file("tip_enriched.txt");
+            // tmp_file << Ke_expanded;
+            // tmp_file.close();
+            // std::ofstream tmp_file2("tip_enriched2.txt");
+            // tmp_file2 << Ke;
+            // tmp_file2.close();
         }else{
             Eigen::Matrix<double, 48, 48> Ke_expanded;
             Ke_expanded.setZero();
@@ -744,9 +763,11 @@ int main()
             FEMAssemble::addElementSparseUpperStiffness(LinearQuad::Element{element[0], element[1], element[2], element[3]},
                                                     Ke_expanded, triplets, node_offset, node_ndof, 12, active);
             Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 48, 48>> es(Ke_expanded);
-            std::cout << "eigenvalues of tip enriched: " << es.eigenvalues() << std::endl;
-            std::cout << "total_area: " << total_area << std::endl;
-            std::cout << "det: " << Ke.determinant() << std::endl;
+            if (!disable_debug_output){
+                std::cout << "eigenvalues of tip enriched: " << es.eigenvalues() << std::endl;
+                std::cout << "total_area: " << total_area << std::endl;
+                std::cout << "det: " << Ke.determinant() << std::endl;
+            }
             // std::cout << Ke << std::endl;
         }
     }
@@ -804,12 +825,12 @@ int main()
             //   << local_points[triangle[2]].x << "," << local_points[triangle[2]].y << "\n";
             for (unsigned int gp = 0; gp < LinearTriangle::Triangle13PointRule::NGauss; gp++)
             {
-                float r = LinearTriangle::Triangle13PointRule::gauss_pts[gp][0];
-                float s = LinearTriangle::Triangle13PointRule::gauss_pts[gp][1];
-                float t = 1 - r - s;
-                float xi = local_points[triangle[0]].x() * t + local_points[triangle[1]].x() * r +
-                           local_points[triangle[2]].x() * s;
-                float eta = local_points[triangle[0]].y() * t + local_points[triangle[1]].y() * r +
+                double r = LinearTriangle::Triangle13PointRule::gauss_pts[gp][0];
+                double s = LinearTriangle::Triangle13PointRule::gauss_pts[gp][1];
+                double t = 1 - r - s;
+                double xi = local_points[triangle[0]].x() * t + local_points[triangle[1]].x() * r +
+                      local_points[triangle[2]].x() * s;
+                double eta = local_points[triangle[0]].y() * t + local_points[triangle[1]].y() * r +
                             local_points[triangle[2]].y() * s;
                 LinearQuad::ShapeData shape;
                 // Node 1
@@ -828,7 +849,7 @@ int main()
                 shape.N[3] = 0.25 * (1 - xi) * (1 + eta);
                 shape.dN_xi_eta(0, 3) = -0.25 * (1 + eta);
                 shape.dN_xi_eta(1, 3) = 0.25 * (1 - xi);
-                LinearTriangle::Triangle13PointRule::JacobianData jd;
+                LinearTriangle::JacobianData jd;
                 // Initialize to zero
                 // std::cout << coords << std::endl;
                 // std::cout << shape.dN_xi_eta << std::endl;
@@ -875,11 +896,13 @@ int main()
                 // std::cout << "Norm of Ke * rigid_x: " << res.norm() << std::endl;  // should be near 0
             }
         }
-        Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 16, 16>> es(Ke);
-        std::cout << "eigenvalues of heaviside element: " << es.eigenvalues() << std::endl;
-        std::cout << "total_area: " << total_area << std::endl;
-        std::cout << "det: " << Ke.determinant() << std::endl;
-        std::cout << element[0] << " " << element[1] << " " << element[2] << " " << element[3] << std::endl;
+        if (!disable_debug_output){
+            Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 16, 16>> es(Ke);
+            std::cout << "eigenvalues of heaviside element: " << es.eigenvalues() << std::endl;
+            std::cout << "total_area: " << total_area << std::endl;
+            std::cout << "det: " << Ke.determinant() << std::endl;
+            std::cout << element[0] << " " << element[1] << " " << element[2] << " " << element[3] << std::endl;
+        }
         if (true || enriched_elements.tip_enriched_nodes[element[0]] || enriched_elements.tip_enriched_nodes[element[1]] || enriched_elements.tip_enriched_nodes[element[2]] ||
             enriched_elements.tip_enriched_nodes[element[3]]){
             Eigen::Matrix<double, 48, 48> Ke_expanded;
@@ -901,12 +924,12 @@ int main()
                         }
                     }
                 }
-                std::ofstream tmp_file("test_heaviside.txt");
-                tmp_file << Ke_expanded;
-                tmp_file.close();
-                std::ofstream tmp_file2("test_heaviside2.txt");
-                tmp_file2 << Ke;
-                tmp_file2.close();
+                // std::ofstream tmp_file("test_heaviside.txt");
+                // tmp_file << Ke_expanded;
+                // tmp_file.close();
+                // std::ofstream tmp_file2("test_heaviside2.txt");
+                // tmp_file2 << Ke;
+                // tmp_file2.close();
             }
             FEMAssemble::addElementSparseUpperStiffness(LinearQuad::Element{element[0], element[1], element[2], element[3]},
                                                         Ke_expanded, triplets, node_offset, node_ndof, 12, active);
@@ -986,15 +1009,16 @@ int main()
         }
         else
         {
-            std::cout << element[0] << " " << element[1] << " " << element[2] << " " << element[3] << std::endl;
+            if (!disable_debug_output)
+                std::cout << element[0] << " " << element[1] << " " << element[2] << " " << element[3] << std::endl;
             FEMAssemble::addElementSparseUpperStiffness(element, Ke, triplets, node_offset, node_ndof, 2, active);
         }
         elementsCreated++;
     }
-    std::cout << std::endl;
+    if (!disable_debug_output)
+        std::cout << std::endl;
     auto K = FEMAssemble::createStiffnessFromTriplets(triplets, dof_counter);
 
-    constexpr bool disable_output = true;
 
     std::cout << "Global stiffness matrix is assembled" << std::endl;
     if (!disable_output)
@@ -1013,25 +1037,25 @@ int main()
     std::vector<int> fixedDofs;
     std::vector<double> fixedValues;
 
-    for (unsigned int i = 0; i < wn; i++)
-    {
-        int off = node_offset[i];
-        fixedDofs.push_back(off);
-        fixedDofs.push_back(off + 1);
-        fixedValues.push_back(0);
-        fixedValues.push_back(0);
-        off = node_offset[(wn * (hn - 1) + i)];
-        // fixedDofs.push_back(off);
-        // fixedDofs.push_back(off + 1);
-        // fixedValues.push_back(0.1);
-        // fixedValues.push_back(0.2);
-        // FEMAssemble::fixDOF(K, P, i, UX|UY);
-    }
-    for (int i = 0; i < wn; i++)
-    {
-        int off = node_offset[(wn * (hn - 1) + i)];
-        P(off + 1) = 1000;
-    }
+    // for (unsigned int i = 0; i < wn; i++)
+    // {
+    //     int off = node_offset[i];
+    //     fixedDofs.push_back(off);
+    //     fixedDofs.push_back(off + 1);
+    //     fixedValues.push_back(0);
+    //     fixedValues.push_back(0);
+    //     off = node_offset[(wn * (hn - 1) + i)];
+    //     // fixedDofs.push_back(off);
+    //     // fixedDofs.push_back(off + 1);
+    //     // fixedValues.push_back(0.1);
+    //     // fixedValues.push_back(0.2);
+    //     // FEMAssemble::fixDOF(K, P, i, UX|UY);
+    // }
+    // for (int i = 0; i < wn; i++)
+    // {
+    //     int off = node_offset[(wn * (hn - 1) + i)];
+    //     P(off + 1) = 10000000;
+    // }
     // P(10) = 1; 
     // Eigen::JacobiSVD<Eigen::MatrixXd> svd{Eigen::MatrixXd(K)};;
     // double cond = svd.singularValues()(0) 
@@ -1041,6 +1065,8 @@ int main()
     //     P((wn*(i)+0)*2) = -10000;
     //     P((wn*(i)+wn-1)*2) = 10000;
     // }
+    applyBC(w, h, wn, hn, P, node_offset, fixedDofs, fixedValues);
+
     FEMAssemble::applyDirichletSymmetric(K, P, fixedDofs, fixedValues);
     if (!disable_output)
     {
@@ -1067,9 +1093,10 @@ int main()
     // Eigen::MatrixXd diff = Kdense - Kdense.transpose();
     // // std::cout << diff << std::endl;
     // std::cout << "Max asymmetry: " << diff.maxCoeff() << std::endl;
-    std::cout << "Energy: " << 0.5 * u.dot(K * u) << std::endl;
+    std::cout << "Energy: " << 0.5 * u.dot(K.selfadjointView<Eigen::Upper>() * u) << std::endl;
     // std::cout << "Ku - P: " << K*u - P << std::endl;
-    Eigen::VectorXd residual = K * u - P;
+    // Eigen::VectorXd residual = K * u - P;
+    Eigen::VectorXd residual = K.selfadjointView<Eigen::Upper>() * u - P;
     double residual_norm = residual.norm();
     // std::cout << "Ku - P: " << residual << std::endl;
     std::cout << "||Ku - P|| = " << residual_norm << std::endl;
@@ -1168,9 +1195,17 @@ int main()
 
     drawHeavisideElements(enriched_elements.heaviside_enriched, mesh, enriched_elements_triangulation.heaviside_enriched_triangulation,
     level_set_fields.vertices_level_set_signs, u, node_offset, enriched_elements.heaviside_enriched_nodes, scale);
-    drawTipElements(enriched_elements.tip_enriched, mesh, enriched_elements_triangulation.tip_enriched_triangulation,
-    level_set_fields.vertices_level_set_signs, u, node_offset, enriched_elements.tip_enriched_nodes, scale, polygonal_chains,
+    drawTipElements(enriched_elements.tip_enriched, mesh, u, node_offset, enriched_elements.heaviside_enriched_nodes, enriched_elements.tip_enriched_nodes, scale, polygonal_chains,
 crack_tip_1_t, crack_tip_1_n, crack_tip_2_t, crack_tip_2_n);
+    computeStress<13>(enriched_elements.tip_enriched, mesh,
+                   enriched_elements_triangulation.tip_enriched_triangulation, u,
+                   node_offset,
+                   enriched_elements.heaviside_enriched_nodes,
+                   LinearTriangle::Triangle13PointRule::gauss_pts,
+                   LinearTriangle::Triangle13PointRule::gauss_wts,
+                   crack_tip_1_t, crack_tip_1_n,
+                   crack_tip_2_t, crack_tip_2_n,
+                   D);
     unsigned int idx;
     for (int i = 0; i < wn; i++)
     {

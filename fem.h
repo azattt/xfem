@@ -62,30 +62,29 @@ struct Node
 
 Eigen::Matrix3d setup_D_matrix(double E, double nu, bool plane_stress);
 
-namespace LinearQuad
-{
-    // struct Element
-    // {
-    //     unsigned int node_ids[4]; // connectivity (global node indices)
-    // };
-    using Element = std::array<int, 4>;
-    // Gauss quadrature data for 2x2 rule
-    constexpr int NGauss = 4;                                                         // 2x2 = 4 points
-    constexpr std::array<double, 2> gauss_pts{-0.577350269189626, 0.577350269189626}; // ±1/√3
-    constexpr std::array<double, 2> gauss_wts{1.0, 1.0}; // weights for 1D, product gives 2D weight
-    struct ShapeData
-    {
-        Eigen::Vector4d N;
-        Eigen::Matrix<double, 2, 4> dN_xi_eta; // first row for xi, second row for eta
-    };
-    std::array<ShapeData, NGauss> precompute_shape_data();
+namespace GeneralFEM{
     struct JacobianData
     {
         Eigen::Matrix2d J;    // Jacobian matrix
         double detJ;          // determinant
         Eigen::Matrix2d invJ; // inverse
     };
+}
+namespace LinearQuad
+{
+    using Element = std::array<int, 4>;
+    using JacobianData = GeneralFEM::JacobianData;
+    // Gauss quadrature data for 2x2 rule
+    constexpr int NGauss = 4;                                                         // 2x2 = 4 points
+    constexpr std::array<double, 2> gauss_pts{-0.577350269189626, 0.577350269189626}; // ±1/√3
+    constexpr std::array<double, 2> gauss_wts{1.0, 1.0}; // weights for 1D, product gives 2D weight
 
+    struct ShapeData
+    {
+        Eigen::Vector4d N;
+        Eigen::Matrix<double, 2, 4> dN_xi_eta; // first row for xi, second row for eta
+    };
+    std::array<ShapeData, NGauss> precompute_shape_data();
     JacobianData compute_jacobian(const ShapeData &shape, const Eigen::Matrix<double, 4, 2> &coords);
     Eigen::Matrix<double, 3, 8> compute_B_matrix(const ShapeData &shape, const JacobianData &jd);
     Eigen::Matrix<double, 8, 8> element_stiffness(const Eigen::Matrix<double, 4, 2> &coordMat, const Eigen::Matrix3d &D, double h);
@@ -97,6 +96,7 @@ namespace LinearTriangle
     constexpr unsigned int nNodes = 3;
     constexpr unsigned int nDOFperNode = 2;
     constexpr unsigned int nStrainTensorComponents = 3;
+    using JacobianData = GeneralFEM::JacobianData;
 // Зенкевич 1975 стр. 82-83
 namespace Triangle3PointRule
 {
@@ -114,12 +114,6 @@ namespace Triangle3PointRule
         Eigen::Matrix<double, 2, NGauss> dN_xi_eta; // first row for xi, second row for eta
     };
     std::array<ShapeData, NGauss> precompute_shape_data();
-    struct JacobianData
-    {
-        Eigen::Matrix2d J;    // Jacobian matrix
-        double detJ;          // determinant
-        Eigen::Matrix2d invJ; // inverse
-    };
 
     JacobianData compute_jacobian(const ShapeData &shape, const Eigen::Matrix<double, 3, 2> &coords);
     Eigen::Matrix<double, nStrainTensorComponents, nNodes*nDOFperNode> compute_B_matrix(const ShapeData &shape, const JacobianData &jd, int heaviside_func_value);
@@ -136,7 +130,6 @@ namespace Triangle7PointRule
         {{1.0 / 3.0, 1.0 / 3.0}, {a1, b1}, {b1, a1}, {b1, b1}, {a2, b2}, {b2, a2}, {b2, b2}}};
     // В Зенкевиче умножены на 2
     constexpr std::array<double, 7> gauss_wts{0.1125, 0.066197075, 0.066197075, 0.066197075, 0.06296959, 0.06296959, 0.06296959};
-    using Triangle3PointRule::JacobianData;
 } // namespace Triangle7PointRule
 
 // -----------------------------------------------------------------------------
@@ -269,9 +262,6 @@ namespace Triangle13PointRule
         for (size_t i=0; i<13; ++i) arr[i] = wts[i];
         return arr;
     }();
-
-    // Reuse the JacobianData structure from TriangleSecondRule (or define your own)
-    using Triangle3PointRule::JacobianData;
 }
 
 } // namespace LinearTriangle
@@ -281,11 +271,12 @@ namespace HeavisideLinearQuad{
     constexpr unsigned int nDOFperNode = 4;
     constexpr unsigned int nStrainTensorComponents = 3;
     
+    using GeneralFEM::JacobianData;
+
     using LinearTriangle::Triangle3PointRule::NGauss;
     using LinearTriangle::Triangle3PointRule::gauss_wts;
     using LinearTriangle::Triangle3PointRule::gauss_pts;
     using LinearTriangle::Triangle3PointRule::ShapeData;
-    using LinearTriangle::Triangle3PointRule::JacobianData;
     using LinearTriangle::Triangle3PointRule::compute_jacobian;
 
     Eigen::Matrix<double, nStrainTensorComponents, LinearTriangle::nNodes*nDOFperNode> compute_subtriangle_B_matrix(const ShapeData &shape, const JacobianData &jd, int heaviside_func_value);
