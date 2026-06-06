@@ -42,4 +42,6 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched, const QuadMesh 
                    const std::array<double, NGauss>& gauss_wts,
                    const Eigen::Vector2d &crack_tip_1_t, const Eigen::Vector2d &crack_tip_1_n,
                    const Eigen::Vector2d &crack_tip_2_t, const Eigen::Vector2d &crack_tip_2_n,
-                   const Eigen::Matrix3d& D);
+                   const Eigen::Matrix3d& D,
+                   const double young_modulus,
+                   const double poisson_ratio);

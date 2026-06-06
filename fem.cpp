@@ -356,10 +356,10 @@ void addElementSparseUpperStiffness(const LinearQuad::Element& element,
                                     const std::vector<unsigned int>& node_ndof,
                                     int max_ndof,
                                     std::vector<bool>& active) {
-    Eigen::MatrixXd diff = Ke - Ke.transpose();
-    double absDiff = (Ke - Ke.transpose()).cwiseAbs().maxCoeff();
-    double maxVal = Ke.cwiseAbs().maxCoeff();
-    double relDiff = absDiff / std::max(maxVal, 1.0);
+    // Eigen::MatrixXd diff = Ke - Ke.transpose();
+    // double absDiff = (Ke - Ke.transpose()).cwiseAbs().maxCoeff();
+    // double maxVal = Ke.cwiseAbs().maxCoeff();
+    // double relDiff = absDiff / std::max(maxVal, 1.0);
 
     // std::cout << "Ke symmetry abs diff = " << absDiff << std::endl;
     // std::cout << "Ke symmetry rel diff = " << relDiff << std::endl;
@@ -379,7 +379,7 @@ void addElementSparseUpperStiffness(const LinearQuad::Element& element,
                 int gi = offI + di;
                 for (int dj = 0; dj < ndJ; ++dj) {
                     int gj = offJ + dj;
-                    if (gi <= gj) {   // upper triangle only
+                    if (true || gi <= gj) {   // upper triangle only
                         double val = Ke(i * max_ndof + di, j * max_ndof + dj);
                         if (std::abs(val) > 1e-15){
                             triplets.emplace_back(gi, gj, val);
@@ -474,7 +474,7 @@ void addElementSparseUpperStiffness(const LinearQuad::Element& element,
         std::cout << "isSymmetric(K): " << isSymmetric(K) << std::endl;
 
         // Eigen::SimplicialLLT<Eigen::SparseMatrix<double>, Eigen::Upper> solver(K);
-        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>, Eigen::Upper> solver(K);
+        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver(K);
         // Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
         solver.analyzePattern(K);
         solver.factorize(K);

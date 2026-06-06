@@ -280,7 +280,7 @@ int main()
     std::vector<LinearQuad::Element> elements;
 
     unsigned int seed = static_cast<unsigned int>(std::time(nullptr));
-    seed = 1773229899;
+    // seed = 1773229899;
     std::cout << "seed: " << seed << std::endl;
     std::srand(seed);
 
@@ -320,6 +320,7 @@ int main()
         for (int i = 0; i < wn; i++)
         {
             mesh.vertices.push_back(Eigen::Vector<double, 2>{i * wh, j * hh});
+            // mesh.vertices.push_back(Eigen::Vector<double, 2>{i * wh + (rand() % 100) / 1000.0, j * hh + (rand() % 100) / 1000.0});
         }
     }
 
@@ -329,6 +330,7 @@ int main()
     {
         for (int i = 0; i < wn - 1; i++)
         {
+            // if ((i >= wn/2 -1 && i <= wn/2) && j == hn/2) continue;
             mesh.elements.push_back(
                 std::array<int, 4>{j * wn + i, j * wn + i + 1, (j + 1) * wn + i + 1, (j + 1) * wn + i});
         }
@@ -418,7 +420,10 @@ int main()
     std::cout << "Assembling matrix of size: " << dof_counter << std::endl;
     std::cout << "Triplets count: " << total_triplets << std::endl;
 
-    Eigen::Matrix3d D = setup_D_matrix(2 * std::pow(10, 11), 0.3, true);
+    const double E = 2 * std::pow(10, 11);
+    constexpr double nu = 0.3;
+    constexpr double t = 0.1;
+    const Eigen::Matrix3d D = setup_D_matrix(E, nu, true);
 
     // tip elements
     // TODO: Not forget to rotate, because crack is rotated atan is incorrect!!!.
@@ -650,7 +655,7 @@ int main()
                     std::cout << "det_tri < 0" << std::endl;
                 if (jd.detJ < 0)
                     std::cout << "jd.detJ < 0" << std::endl;
-                Ke += factor * (B.transpose() * D * B);
+                Ke += factor * (B.transpose() * D * B) * t;
                 total_area += LinearTriangle::Triangle13PointRule::gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
                 if (!disable_debug_output){
                 Eigen::VectorXd rigid_x(40);
@@ -884,7 +889,7 @@ int main()
                     std::cout << "det_tri < 0" << std::endl;
                 if (jd.detJ < 0)
                     std::cout << "jd.detJ < 0" << std::endl;
-                Ke += factor * (B.transpose() * D * B);
+                Ke += factor * (B.transpose() * D * B) * t;
                 total_area += det_tri;
                 // Eigen::VectorXd rigid_x(16);
                 // rigid_x.setZero();
@@ -962,7 +967,7 @@ int main()
             coordMat(i, 0) = mesh.vertices[element[i]].x();
             coordMat(i, 1) = mesh.vertices[element[i]].y();
         }
-        Ke = LinearQuad::element_stiffness(coordMat, D, 0.1);
+        Ke = LinearQuad::element_stiffness(coordMat, D, t);
         // whether no enrichment or blend
         if (false && (enriched_elements.heaviside_enriched_nodes[element[0]] ||
             enriched_elements.heaviside_enriched_nodes[element[1]] ||
@@ -1205,7 +1210,7 @@ crack_tip_1_t, crack_tip_1_n, crack_tip_2_t, crack_tip_2_n);
                    LinearTriangle::Triangle13PointRule::gauss_wts,
                    crack_tip_1_t, crack_tip_1_n,
                    crack_tip_2_t, crack_tip_2_n,
-                   D);
+                   D, E, nu);
     unsigned int idx;
     for (int i = 0; i < wn; i++)
     {
