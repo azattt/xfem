@@ -253,407 +253,684 @@ void drawTipElements(const std::vector<TipEnriched> &tip_enriched, const QuadMes
 }
 
 template <unsigned int NGauss>
-void computeStress(const std::vector<TipEnriched> &tip_enriched, const QuadMesh &mesh,
-                   const std::vector<TipTriangulation> &tip_enriched_triangulation, const Eigen::VectorXd &u_solu,
-                   const std::vector<unsigned int> &node_offset, const std::vector<bool> &heaviside_enriched_nodes,
+void computeStress(const std::vector<TipEnriched> &tip_enriched,
+                   const std::vector<HeavisideEnriched> &heaviside_enriched, const QuadMesh &mesh,
+                   const std::vector<TipTriangulation> &tip_enriched_triangulation,
+                   const std::vector<HeavisideTriangulation> &heaviside_enriched_triangulation,
+                   const Eigen::VectorXd &u_solu, const std::vector<unsigned int> &node_offset,
+                   const std::vector<bool> &heaviside_enriched_nodes, const std::vector<bool> &tip_enriched_nodes,
+                   const std::vector<LevelSetSign> &vertices_level_set_signs,
                    const std::array<std::array<double, 2>, NGauss> &gauss_pts,
                    const std::array<double, NGauss> &gauss_wts, const Eigen::Vector2d &crack_tip_1_t,
                    const Eigen::Vector2d &crack_tip_1_n, const Eigen::Vector2d &crack_tip_2_t,
                    const Eigen::Vector2d &crack_tip_2_n, const Eigen::Matrix3d &D, const double young_modulus,
-                   const double poisson_ratio)
+                   const double poisson_ratio, const double Rin, const double Rout)
 {
-    double const shear_modulus = young_modulus / (2.0 * (1.0 + poisson_ratio));
-    double const kolosov_constant = (3 - poisson_ratio) / (1 + poisson_ratio); // plane stress
-    double const INV_2MU_INV_SQRT_2PI = 1.0 / (2 * shear_modulus) * INV_SQRT_2PI;
+    const double E = young_modulus;
+    const double nu = poisson_ratio;
+    const double shear_modulus = E / (2.0 * (1.0 + nu));
+    const double kappa = (3.0 - nu) / (1.0 + nu); // plane stress
 
-    for (size_t i = 0; i < tip_enriched.size(); i++)
-    {
-        const TipEnriched &enriched_element = tip_enriched[i];
-        const std::array<int, 4> &element = mesh.elements[enriched_element.id];
-        const TipTriangulation &triangulation = tip_enriched_triangulation[i];
-        // u_x u_y f1_x f1_y f2_x f2_y f3_x f3_y f4_x f4_y . total 10 dof per node
-        // 4 nodes. total 40 dofs per element
-        std::array<Eigen::Vector2d, 4> points = {
-            mesh.vertices[element[0]],
-            mesh.vertices[element[1]],
-            mesh.vertices[element[2]],
-            mesh.vertices[element[3]],
-        };
-        std::array<Eigen::Vector2d, 6> local_points = {Eigen::Vector2d{-1, -1},
-                                                       Eigen::Vector2d{1, -1},
-                                                       Eigen::Vector2d{1, 1},
-                                                       Eigen::Vector2d{-1, 1},
-                                                       enriched_element.intersection_point_local_coords,
-                                                       enriched_element.tip_point_local_coords};
-        const Eigen::Matrix<double, 4, 2> coords{{{points[0].x(), points[0].y()},
-                                                  {points[1].x(), points[1].y()},
-                                                  {points[2].x(), points[2].y()},
-                                                  {points[3].x(), points[3].y()}}};
-        const int ndof_per_node = 10;           // standard (2) + tip (8)
-        Eigen::VectorXd u_e(4 * ndof_per_node); // size 40
+    const double invE = 1.0 / E;
+
+    auto fillQuadShape = [](double xi, double eta) {
+        LinearQuad::ShapeData shape;
+
+        shape.N[0] = 0.25 * (1.0 - xi) * (1.0 - eta);
+        shape.N[1] = 0.25 * (1.0 + xi) * (1.0 - eta);
+        shape.N[2] = 0.25 * (1.0 + xi) * (1.0 + eta);
+        shape.N[3] = 0.25 * (1.0 - xi) * (1.0 + eta);
+
+        shape.dN_xi_eta(0, 0) = -0.25 * (1.0 - eta);
+        shape.dN_xi_eta(1, 0) = -0.25 * (1.0 - xi);
+
+        shape.dN_xi_eta(0, 1) = 0.25 * (1.0 - eta);
+        shape.dN_xi_eta(1, 1) = -0.25 * (1.0 + xi);
+
+        shape.dN_xi_eta(0, 2) = 0.25 * (1.0 + eta);
+        shape.dN_xi_eta(1, 2) = 0.25 * (1.0 + xi);
+
+        shape.dN_xi_eta(0, 3) = -0.25 * (1.0 + eta);
+        shape.dN_xi_eta(1, 3) = 0.25 * (1.0 - xi);
+
+        return shape;
+    };
+
+    auto elementSize = [](const Eigen::Matrix<double, 4, 2> &coords) {
+        const double h01 = (coords.row(1) - coords.row(0)).norm();
+        const double h12 = (coords.row(2) - coords.row(1)).norm();
+        const double h23 = (coords.row(3) - coords.row(2)).norm();
+        const double h30 = (coords.row(0) - coords.row(3)).norm();
+
+        return 0.25 * (h01 + h12 + h23 + h30);
+    };
+
+    auto elementIntersectsRadius = [](const Eigen::Matrix<double, 4, 2> &coords, const Eigen::Vector2d &tip,
+                                      double radius) {
+        Eigen::Vector2d center = Eigen::Vector2d::Zero();
 
         for (int i = 0; i < 4; ++i)
         {
-            int node = element[i];
-            int off = node_offset[node]; // global start index for this node
-
-            // Standard displacements (indices 0,1) -> positions 0,1 in u_e
-            u_e.segment(ndof_per_node * i, 2) = u_solu.segment(off, 2);
-
-            // Skip Heaviside DOFs (indices 2,3) – nothing copied
-
-            // Tip enrichment DOFs (indices 4..11) -> positions 2..9 in u_e
-            u_e.segment(ndof_per_node * i + 2, 8) = u_solu.segment(off + 4, 8);
+            center += coords.row(i).transpose();
         }
-        std::array<std::array<double, 4>, 4> f_nodes;
-        Eigen::Vector2d d;
-        double radius, radius2, theta, sqrt_r, sinhalftheta, sintheta, coshalftheta, costheta;
-        for (int n = 0; n < 4; n++)
+
+        center /= 4.0;
+
+        double elem_radius = 0.0;
+
+        for (int i = 0; i < 4; ++i)
         {
-            Eigen::Vector2d tip_point_global_coords = Eigen::Vector2d::Zero();
-            double xi_tip = enriched_element.tip_point_local_coords.x();
-            double eta_tip = enriched_element.tip_point_local_coords.y();
-            std::array<double, 4> N_tip;
-
-            N_tip[0] = 0.25 * (1 - xi_tip) * (1 - eta_tip);
-            N_tip[1] = 0.25 * (1 + xi_tip) * (1 - eta_tip);
-            N_tip[2] = 0.25 * (1 + xi_tip) * (1 + eta_tip);
-            N_tip[3] = 0.25 * (1 - xi_tip) * (1 + eta_tip);
-            for (int k = 0; k < 4; k++)
-            {
-                tip_point_global_coords += N_tip[k] * coords.row(k);
-            }
-            d = (coords.row(n).transpose() - tip_point_global_coords);
-            radius = d.norm();
-
-            if (enriched_element.tip_index == 1)
-            {
-                theta = std::atan2(d.dot(crack_tip_1_n), d.dot(crack_tip_1_t));
-            }
-            else if (enriched_element.tip_index == 2)
-            {
-                theta = std::atan2(d.dot(crack_tip_2_n), d.dot(crack_tip_2_t));
-            }
-
-            sqrt_r = std::sqrt(radius);
-            sinhalftheta = std::sin(theta / 2);
-            sintheta = std::sin(theta);
-            coshalftheta = std::cos(theta / 2);
-            f_nodes[n] = {sqrt_r * sinhalftheta, sqrt_r * coshalftheta, sqrt_r * sintheta * sinhalftheta,
-                          sqrt_r * sintheta * coshalftheta};
+            elem_radius = std::max(elem_radius, (coords.row(i).transpose() - center).norm());
         }
-        std::array<double, 4> dfdr, dfdtheta;
-        double drdx, drdy, dthetadx, dthetady;
-        std::array<Eigen::Vector2d, 4> df_dx;
-        double dNdx, dNdy, Nn;
-        double shift;
-        double factor;
-        Eigen::Matrix<double, 3, 40> B;
 
-        double total_area = 0.0;
+        return (center - tip).norm() <= radius + elem_radius;
+    };
+    std::vector<int> heaviside_element_to_index(mesh.elements.size(), -1);
+
+    for (int i = 0; i < static_cast<int>(heaviside_enriched.size()); ++i)
+    {
+        const int element_id = heaviside_enriched[i].id;
+
+        if (element_id < 0 || element_id >= static_cast<int>(mesh.elements.size()))
+        {
+            throw std::runtime_error("Invalid Heaviside enriched element id");
+        }
+
+        heaviside_element_to_index[element_id] = i;
+    }
+    for (size_t tip_idx = 0; tip_idx < tip_enriched.size(); ++tip_idx)
+    {
+        const TipEnriched &tip_data = tip_enriched[tip_idx];
+        const std::array<int, 4> &tip_element = mesh.elements[tip_data.id];
+
+        const Eigen::Vector2d t_vec = (tip_data.tip_index == 1 ? crack_tip_1_t : crack_tip_2_t).normalized();
+
+        const Eigen::Vector2d n_vec = (tip_data.tip_index == 1 ? crack_tip_1_n : crack_tip_2_n).normalized();
+
+        Eigen::Matrix2d R;
+        R.col(0) = t_vec; // local x1
+        R.col(1) = n_vec; // local x2
+        // std::cout << "tip_index = " << static_cast<int>(tip_data.tip_index) << "\n";
+        // // std::cout << "tip_point = " << tip_point_global.transpose() << "\n";
+        // std::cout << "t_vec = " << t_vec.transpose() << "\n";
+        // std::cout << "n_vec = " << n_vec.transpose() << "\n";
+        // std::cout << "det(R) = " << R.determinant() << "\n";
+        Eigen::Matrix<double, 4, 2> tip_coords;
+
+        for (int n = 0; n < 4; ++n)
+        {
+            tip_coords.row(n) = mesh.vertices[tip_element[n]];
+        }
+
+        const double xi_tip = tip_data.tip_point_local_coords.x();
+        const double eta_tip = tip_data.tip_point_local_coords.y();
+
+        std::array<double, 4> N_tip;
+        N_tip[0] = 0.25 * (1.0 - xi_tip) * (1.0 - eta_tip);
+        N_tip[1] = 0.25 * (1.0 + xi_tip) * (1.0 - eta_tip);
+        N_tip[2] = 0.25 * (1.0 + xi_tip) * (1.0 + eta_tip);
+        N_tip[3] = 0.25 * (1.0 - xi_tip) * (1.0 + eta_tip);
+
+        Eigen::Vector2d tip_point_global = Eigen::Vector2d::Zero();
+
+        for (int n = 0; n < 4; ++n)
+        {
+            tip_point_global += N_tip[n] * tip_coords.row(n).transpose();
+        }
+
+        const double h_tip = elementSize(tip_coords);
+
+        const double Rin_h = Rin * h_tip;
+        const double Rout_h = Rout * h_tip;
+
+        std::cout << "Rin_h, Rout_h: " << Rin_h << " " << Rout_h << std::endl;
+
         double I_mode1 = 0.0;
         double I_mode2 = 0.0;
-        for (unsigned int j = 0; j < 5; j++)
-        {
+        int used_elements = 0;
 
-            const std::array<unsigned char, 3> &triangle = triangulation.tri_indices[j];
+        auto integrateAtPoint = [&](const std::array<int, 4> &element, const Eigen::Matrix<double, 4, 2> &coords,
+                                    double xi, double eta, double integration_weight, int forced_H_value) {
+            LinearQuad::ShapeData shape = fillQuadShape(xi, eta);
 
-            Eigen::Matrix2d J_xieta_rs{{{local_points[triangle[1]].x() - local_points[triangle[0]].x(),
-                                         local_points[triangle[2]].x() - local_points[triangle[0]].x()},
-                                        {local_points[triangle[1]].y() - local_points[triangle[0]].y(),
-                                         local_points[triangle[2]].y() - local_points[triangle[0]].y()}}};
-            double det_tri = J_xieta_rs.determinant();
-            for (unsigned int gp = 0; gp < NGauss; gp++)
+            LinearTriangle::JacobianData jd;
+            jd.J = shape.dN_xi_eta * coords;
+
+            bool invertible = false;
+            jd.J.computeInverseAndDetWithCheck(jd.invJ, jd.detJ, invertible, 1e-12);
+
+            if (!invertible)
             {
-                B.setZero();
-                double r = gauss_pts[gp][0];
-                double s = gauss_pts[gp][1];
-                double t = 1 - r - s;
-                double xi = local_points[triangle[0]].x() * t + local_points[triangle[1]].x() * r +
-                            local_points[triangle[2]].x() * s;
-                double eta = local_points[triangle[0]].y() * t + local_points[triangle[1]].y() * r +
-                             local_points[triangle[2]].y() * s;
-                LinearQuad::ShapeData shape;
-                // Node 1
-                shape.N[0] = 0.25 * (1 - xi) * (1 - eta);
-                shape.dN_xi_eta(0, 0) = -0.25 * (1 - eta);
-                shape.dN_xi_eta(1, 0) = -0.25 * (1 - xi);
-                // Node 2
-                shape.N[1] = 0.25 * (1 + xi) * (1 - eta);
-                shape.dN_xi_eta(0, 1) = 0.25 * (1 - eta);
-                shape.dN_xi_eta(1, 1) = -0.25 * (1 + xi);
-                // Node 3
-                shape.N[2] = 0.25 * (1 + xi) * (1 + eta);
-                shape.dN_xi_eta(0, 2) = 0.25 * (1 + eta);
-                shape.dN_xi_eta(1, 2) = 0.25 * (1 + xi);
-                // Node 4
-                shape.N[3] = 0.25 * (1 - xi) * (1 + eta);
-                shape.dN_xi_eta(0, 3) = -0.25 * (1 + eta);
-                shape.dN_xi_eta(1, 3) = 0.25 * (1 - xi);
+                throw std::runtime_error("Jacobi matrix is not invertible");
+            }
 
-                LinearTriangle::JacobianData jd;
-                jd.J = shape.dN_xi_eta * coords;
-                bool invertible;
-                jd.J.computeInverseAndDetWithCheck(jd.invJ, jd.detJ, invertible, 1e-12);
-                if (!invertible)
-                    throw std::runtime_error("Jacobi matrix is not invertible");
+            Eigen::Matrix<double, 2, 4> dN_dx_dy = jd.invJ * shape.dN_xi_eta;
 
-                Eigen::Matrix<double, 2, 4> dN_dx_dy;
-                dN_dx_dy = jd.invJ * shape.dN_xi_eta;
+            Eigen::Vector2d x_global = Eigen::Vector2d::Zero();
 
-                Eigen::Vector2d gauss_point_global_coords = Eigen::Vector2d::Zero();
-                Eigen::Vector2d tip_point_global_coords = Eigen::Vector2d::Zero();
-                double xi_tip = enriched_element.tip_point_local_coords.x();
-                double eta_tip = enriched_element.tip_point_local_coords.y();
-                std::array<double, 4> N_tip;
+            for (int n = 0; n < 4; ++n)
+            {
+                x_global += shape.N[n] * coords.row(n).transpose();
+            }
 
-                N_tip[0] = 0.25 * (1 - xi_tip) * (1 - eta_tip);
-                N_tip[1] = 0.25 * (1 + xi_tip) * (1 - eta_tip);
-                N_tip[2] = 0.25 * (1 + xi_tip) * (1 + eta_tip);
-                N_tip[3] = 0.25 * (1 - xi_tip) * (1 + eta_tip);
-                for (int k = 0; k < 4; k++)
+            const Eigen::Vector2d d = x_global - tip_point_global;
+
+            const double x1 = d.dot(t_vec);
+            const double x2 = d.dot(n_vec);
+
+            const double radius2 = x1 * x1 + x2 * x2;
+            const double radius = std::sqrt(radius2);
+
+            if (radius < 1e-12 || radius >= Rout_h)
+            {
+                return;
+            }
+
+            const double theta = std::atan2(x2, x1);
+            const double sqrt_r = std::sqrt(radius);
+            const double inv_sqrt_r = 1.0 / sqrt_r;
+
+            const double sin_half = std::sin(theta / 2.0);
+            const double cos_half = std::cos(theta / 2.0);
+            const double sin_theta = std::sin(theta);
+            const double cos_theta = std::cos(theta);
+            const double sin_three_half = std::sin(3.0 * theta / 2.0);
+            const double cos_three_half = std::cos(3.0 * theta / 2.0);
+
+            std::array<double, 4> f = {sqrt_r * sin_half, sqrt_r * cos_half, sqrt_r * sin_theta * sin_half,
+                                       sqrt_r * sin_theta * cos_half};
+
+            std::array<double, 4> df_dr;
+            std::array<double, 4> df_dtheta;
+
+            df_dr[0] = 0.5 * inv_sqrt_r * sin_half;
+            df_dr[1] = 0.5 * inv_sqrt_r * cos_half;
+            df_dr[2] = 0.5 * inv_sqrt_r * sin_half * sin_theta;
+            df_dr[3] = 0.5 * inv_sqrt_r * cos_half * sin_theta;
+
+            df_dtheta[0] = sqrt_r * 0.5 * cos_half;
+            df_dtheta[1] = -sqrt_r * 0.5 * sin_half;
+            df_dtheta[2] = sqrt_r * (0.5 * cos_half * sin_theta + sin_half * cos_theta);
+            df_dtheta[3] = sqrt_r * (-0.5 * sin_half * sin_theta + cos_half * cos_theta);
+
+            const double drdx = d.x() / radius;
+            const double drdy = d.y() / radius;
+
+            const double dtheta_dx = (x1 * n_vec.x() - x2 * t_vec.x()) / radius2;
+
+            const double dtheta_dy = (x1 * n_vec.y() - x2 * t_vec.y()) / radius2;
+
+            std::array<Eigen::Vector2d, 4> df_dx;
+
+            for (int a = 0; a < 4; ++a)
+            {
+                df_dx[a].x() = df_dr[a] * drdx + df_dtheta[a] * dtheta_dx;
+                df_dx[a].y() = df_dr[a] * drdy + df_dtheta[a] * dtheta_dy;
+            }
+
+            std::array<std::array<double, 4>, 4> f_nodes;
+
+            for (int n = 0; n < 4; ++n)
+            {
+                Eigen::Vector2d d_node = coords.row(n).transpose() - tip_point_global;
+
+                const double node_x1 = d_node.dot(t_vec);
+                const double node_x2 = d_node.dot(n_vec);
+
+                const double node_radius = std::sqrt(node_x1 * node_x1 + node_x2 * node_x2);
+
+                const double node_theta = std::atan2(node_x2, node_x1);
+
+                const double node_sqrt_r = std::sqrt(node_radius);
+                const double node_sin_half = std::sin(node_theta / 2.0);
+                const double node_cos_half = std::cos(node_theta / 2.0);
+                const double node_sin_theta = std::sin(node_theta);
+
+                f_nodes[n] = {node_sqrt_r * node_sin_half, node_sqrt_r * node_cos_half,
+                              node_sqrt_r * node_sin_theta * node_sin_half,
+                              node_sqrt_r * node_sin_theta * node_cos_half};
+            }
+
+            Eigen::Matrix2d grad_u_global;
+            grad_u_global.setZero();
+
+            int H_at_x = forced_H_value;
+
+            if (H_at_x == 0)
+            {
+                H_at_x = (x2 >= 0.0) ? 1 : -1;
+            }
+
+            for (int n = 0; n < 4; ++n)
+            {
+                const int node = element[n];
+                const int off = node_offset[node];
+
+                const double dNdx = dN_dx_dy(0, n);
+                const double dNdy = dN_dx_dy(1, n);
+                const double Nn = shape.N[n];
+
+                const double ux = u_solu(off);
+                const double uy = u_solu(off + 1);
+
+                grad_u_global(0, 0) += dNdx * ux;
+                grad_u_global(0, 1) += dNdy * ux;
+                grad_u_global(1, 0) += dNdx * uy;
+                grad_u_global(1, 1) += dNdy * uy;
+
+                if (heaviside_enriched_nodes[node])
                 {
-                    gauss_point_global_coords += shape.N[k] * coords.row(k);
-                    tip_point_global_coords += N_tip[k] * coords.row(k);
+                    const int H_i = vertices_level_set_signs[node].sign;
+                    const double H_shift = static_cast<double>(H_at_x - H_i);
+
+                    const double ax = u_solu(off + 2);
+                    const double ay = u_solu(off + 3);
+
+                    grad_u_global(0, 0) += dNdx * H_shift * ax;
+                    grad_u_global(0, 1) += dNdy * H_shift * ax;
+                    grad_u_global(1, 0) += dNdx * H_shift * ay;
+                    grad_u_global(1, 1) += dNdy * H_shift * ay;
                 }
-                d = gauss_point_global_coords - tip_point_global_coords;
-                radius2 = d.squaredNorm();
-                radius = std::sqrt(radius2);
-                if (enriched_element.tip_index == 1)
+
+                if (tip_enriched_nodes[node])
                 {
-                    theta = std::atan2(d.dot(crack_tip_1_n), d.dot(crack_tip_1_t));
-                }
-                else if (enriched_element.tip_index == 2)
-                {
-                    theta = std::atan2(d.dot(crack_tip_2_n), d.dot(crack_tip_2_t));
-                }
-
-                sqrt_r = std::sqrt(radius);
-                sinhalftheta = std::sin(theta / 2);
-                sintheta = std::sin(theta);
-                coshalftheta = std::cos(theta / 2);
-                costheta = std::cos(theta);
-                std::array<double, 4> f = {sqrt_r * sinhalftheta, sqrt_r * coshalftheta,
-                                           sqrt_r * sintheta * sinhalftheta, sqrt_r * sintheta * coshalftheta};
-
-                dfdr[0] = 0.5 / sqrt_r * sinhalftheta; // ∂f1/∂r
-                dfdr[1] = 0.5 / sqrt_r * coshalftheta;
-                dfdr[2] = 0.5 / sqrt_r * sinhalftheta * sintheta;
-                dfdr[3] = 0.5 / sqrt_r * coshalftheta * sintheta;
-
-                dfdtheta[0] = sqrt_r * 0.5 * coshalftheta; // ∂f1/∂θ
-                dfdtheta[1] = -sqrt_r * 0.5 * sinhalftheta;
-                dfdtheta[2] = sqrt_r * (0.5 * coshalftheta * sintheta + sinhalftheta * costheta);
-                dfdtheta[3] = sqrt_r * (-0.5 * sinhalftheta * sintheta + coshalftheta * costheta);
-
-                drdx = (radius > 1e-12) ? d.x() / radius : 0.0;
-                drdy = (radius > 1e-12) ? d.y() / radius : 0.0;
-                if (enriched_element.tip_index == 1)
-                {
-                    double a = d.dot(crack_tip_1_t); // distance along tangent
-                    double b = d.dot(crack_tip_1_n); // distance along normal
-                    double r2 = a * a + b * b;
-                    if (r2 > 1e-12)
+                    for (int a = 0; a < 4; ++a)
                     {
-                        dthetadx = (a * crack_tip_1_n.x() - b * crack_tip_1_t.x()) / r2;
-                        dthetady = (a * crack_tip_1_n.y() - b * crack_tip_1_t.y()) / r2;
-                    }
-                    else
-                    {
-                        dthetadx = dthetady = 0.0;
+                        const double bx = u_solu(off + 4 + 2 * a);
+                        const double by = u_solu(off + 4 + 2 * a + 1);
+
+                        const double shift = f[a] - f_nodes[n][a];
+
+                        const double d_enr_dx = dNdx * shift + Nn * df_dx[a].x();
+
+                        const double d_enr_dy = dNdy * shift + Nn * df_dx[a].y();
+
+                        grad_u_global(0, 0) += d_enr_dx * bx;
+                        grad_u_global(0, 1) += d_enr_dy * bx;
+                        grad_u_global(1, 0) += d_enr_dx * by;
+                        grad_u_global(1, 1) += d_enr_dy * by;
                     }
                 }
-                else if (enriched_element.tip_index == 2)
+            }
+
+            Eigen::Vector3d strain_global;
+            strain_global << grad_u_global(0, 0), grad_u_global(1, 1), grad_u_global(0, 1) + grad_u_global(1, 0);
+
+            const Eigen::Vector3d stress_global_voigt = D * strain_global;
+
+            Eigen::Matrix2d sigma_global;
+            sigma_global << stress_global_voigt(0), stress_global_voigt(2), stress_global_voigt(2),
+                stress_global_voigt(1);
+
+            const Eigen::Matrix2d sigma_local = R.transpose() * sigma_global * R;
+
+            const Eigen::Matrix2d grad_u_local = R.transpose() * grad_u_global * R;
+
+            Eigen::Vector3d stress;
+            stress << sigma_local(0, 0), sigma_local(1, 1), sigma_local(0, 1);
+
+            const double du1_dx1_act = grad_u_local(0, 0);
+            const double du2_dx1_act = grad_u_local(1, 0);
+
+            const double inv_sqrt_2pi_inv_sqrt_r = INV_SQRT_2PI * inv_sqrt_r;
+
+            Eigen::Vector3d sigma_aux_mode_1;
+            sigma_aux_mode_1 << cos_half * (1.0 - sin_half * sin_three_half),
+                cos_half * (1.0 + sin_half * sin_three_half), sin_half * cos_half * cos_three_half;
+
+            sigma_aux_mode_1 *= inv_sqrt_2pi_inv_sqrt_r;
+
+            Eigen::Vector3d sigma_aux_mode_2;
+            sigma_aux_mode_2 << -sin_half * (2.0 + cos_half * cos_three_half), sin_half * cos_half * cos_three_half,
+                cos_half * (1.0 - sin_half * sin_three_half);
+
+            sigma_aux_mode_2 *= inv_sqrt_2pi_inv_sqrt_r;
+
+            auto auxDisplacement = [&](double xx1, double xx2, int mode) -> Eigen::Vector2d {
+                const double rr2 = xx1 * xx1 + xx2 * xx2;
+                const double rr = std::sqrt(rr2);
+
+                if (rr < 1e-14)
                 {
-                    double a = d.dot(crack_tip_2_t); // distance along tangent
-                    double b = d.dot(crack_tip_2_n); // distance along normal
-                    double r2 = a * a + b * b;
-                    if (r2 > 1e-12)
-                    {
-                        dthetadx = (a * crack_tip_2_n.x() - b * crack_tip_2_t.x()) / r2;
-                        dthetady = (a * crack_tip_2_n.y() - b * crack_tip_2_t.y()) / r2;
-                    }
-                    else
-                    {
-                        dthetadx = dthetady = 0.0;
-                    }
+                    return Eigen::Vector2d::Zero();
                 }
 
-                for (int a = 0; a < 4; ++a)
+                const double th = std::atan2(xx2, xx1);
+                const double sqrt_rr = std::sqrt(rr);
+
+                const double sh = std::sin(th / 2.0);
+                const double ch = std::cos(th / 2.0);
+                const double cth = std::cos(th);
+
+                const double factor = (1.0 / (2.0 * shear_modulus)) * INV_SQRT_2PI * sqrt_rr;
+
+                if (mode == 1)
                 {
-                    df_dx[a].x() = dfdr[a] * drdx + dfdtheta[a] * dthetadx;
-                    df_dx[a].y() = dfdr[a] * drdy + dfdtheta[a] * dthetady;
+                    // Mode I auxiliary displacement, K_I_aux = 1
+                    return factor *
+                           Eigen::Vector2d{ch * (kappa - 1.0 + 2.0 * sh * sh), sh * (kappa + 1.0 - 2.0 * ch * ch)};
                 }
 
-                for (int n = 0; n < 4; ++n)
+                // Mode II auxiliary displacement, K_II_aux = 1
+                return factor * Eigen::Vector2d{sh * (kappa + 2.0 + cth), -ch * (kappa - 2.0 + cth)};
+            };
+
+            // Analytical derivatives of auxiliary displacement with respect to local x1.
+            //
+            // u_aux = C * sqrt(r) * G(theta)
+            // C = 1 / (2 * mu * sqrt(2*pi))
+            //
+            // d/dx1 [C * sqrt(r) * G(theta)]
+            // = C / sqrt(r) * [0.5 * cos(theta) * G(theta)
+            //                  - sin(theta) * dG/dtheta]
+            //
+            // because:
+            // dr/dx1 = cos(theta)
+            // dtheta/dx1 = -sin(theta) / r
+
+            const double aux_deriv_factor = (1.0 / (2.0 * shear_modulus)) * INV_SQRT_2PI * inv_sqrt_r;
+
+            // --------------------
+            // Mode I auxiliary field
+            // --------------------
+            //
+            // u1_I = C * sqrt(r) * cos(theta/2) * (kappa - cos(theta))
+            // u2_I = C * sqrt(r) * sin(theta/2) * (kappa - cos(theta))
+
+            const double A_I = kappa - cos_theta;
+
+            const double G1_I = cos_half * A_I;
+            const double G2_I = sin_half * A_I;
+
+            // d/dtheta(kappa - cos(theta)) = sin(theta)
+            const double dG1_I_dtheta = -0.5 * sin_half * A_I + cos_half * sin_theta;
+
+            const double dG2_I_dtheta = 0.5 * cos_half * A_I + sin_half * sin_theta;
+
+            const double du1_dx1_aux_mode_1 = aux_deriv_factor * (0.5 * cos_theta * G1_I - sin_theta * dG1_I_dtheta);
+
+            const double du2_dx1_aux_mode_1 = aux_deriv_factor * (0.5 * cos_theta * G2_I - sin_theta * dG2_I_dtheta);
+
+            // --------------------
+            // Mode II auxiliary field
+            // --------------------
+            //
+            // u1_II = C * sqrt(r) * sin(theta/2) * (kappa + 2 + cos(theta))
+            // u2_II = -C * sqrt(r) * cos(theta/2) * (kappa - 2 + cos(theta))
+
+            const double A_II_1 = kappa + 2.0 + cos_theta;
+            const double A_II_2 = kappa - 2.0 + cos_theta;
+
+            const double G1_II = sin_half * A_II_1;
+            const double G2_II = -cos_half * A_II_2;
+
+            // d/dtheta(kappa + 2 + cos(theta)) = -sin(theta)
+            // d/dtheta(kappa - 2 + cos(theta)) = -sin(theta)
+
+            const double dG1_II_dtheta = 0.5 * cos_half * A_II_1 - sin_half * sin_theta;
+
+            const double dG2_II_dtheta = 0.5 * sin_half * A_II_2 + cos_half * sin_theta;
+
+            const double du1_dx1_aux_mode_2 = aux_deriv_factor * (0.5 * cos_theta * G1_II - sin_theta * dG1_II_dtheta);
+
+            const double du2_dx1_aux_mode_2 = aux_deriv_factor * (0.5 * cos_theta * G2_II - sin_theta * dG2_II_dtheta);
+
+            const double eps11_aux1 = invE * (sigma_aux_mode_1(0) - nu * sigma_aux_mode_1(1));
+
+            const double eps22_aux1 = invE * (sigma_aux_mode_1(1) - nu * sigma_aux_mode_1(0));
+
+            const double eps12_aux1 = (1.0 + nu) / E * sigma_aux_mode_1(2);
+
+            const double eps11_aux2 = invE * (sigma_aux_mode_2(0) - nu * sigma_aux_mode_2(1));
+
+            const double eps22_aux2 = invE * (sigma_aux_mode_2(1) - nu * sigma_aux_mode_2(0));
+
+            const double eps12_aux2 = (1.0 + nu) / E * sigma_aux_mode_2(2);
+
+            const double W12_mode1 = stress(0) * eps11_aux1 + stress(1) * eps22_aux1 + 2.0 * stress(2) * eps12_aux1;
+
+            const double W12_mode2 = stress(0) * eps11_aux2 + stress(1) * eps22_aux2 + 2.0 * stress(2) * eps12_aux2;
+
+            const double A1_mode1 = stress(0) * du1_dx1_aux_mode_1 + stress(2) * du2_dx1_aux_mode_1 +
+                                    sigma_aux_mode_1(0) * du1_dx1_act + sigma_aux_mode_1(2) * du2_dx1_act - W12_mode1;
+
+            const double A2_mode1 = stress(2) * du1_dx1_aux_mode_1 + stress(1) * du2_dx1_aux_mode_1 +
+                                    sigma_aux_mode_1(2) * du1_dx1_act + sigma_aux_mode_1(1) * du2_dx1_act;
+
+            const double A1_mode2 = stress(0) * du1_dx1_aux_mode_2 + stress(2) * du2_dx1_aux_mode_2 +
+                                    sigma_aux_mode_2(0) * du1_dx1_act + sigma_aux_mode_2(2) * du2_dx1_act - W12_mode2;
+
+            const double A2_mode2 = stress(2) * du1_dx1_aux_mode_2 + stress(1) * du2_dx1_aux_mode_2 +
+                                    sigma_aux_mode_2(2) * du1_dx1_act + sigma_aux_mode_2(1) * du2_dx1_act;
+
+            double dqdr = 0.0;
+
+            if (radius <= Rin_h)
+            {
+                dqdr = 0.0;
+            }
+            else if (radius >= Rout_h)
+            {
+                dqdr = 0.0;
+            }
+            else
+            {
+                dqdr = -1.0 / (Rout_h - Rin_h);
+            }
+
+            const double dqdx1 = dqdr * x1 / radius;
+            const double dqdx2 = dqdr * x2 / radius;
+
+            const double integrand_mode1 = A1_mode1 * dqdx1 + A2_mode1 * dqdx2;
+
+            const double integrand_mode2 = A1_mode2 * dqdx1 + A2_mode2 * dqdx2;
+
+            I_mode1 += integrand_mode1 * integration_weight;
+            I_mode2 += integrand_mode2 * integration_weight;
+        };
+
+        for (size_t elem_id = 0; elem_id < mesh.elements.size(); ++elem_id)
+        {
+            const std::array<int, 4> &element = mesh.elements[elem_id];
+
+            Eigen::Matrix<double, 4, 2> coords;
+
+            for (int n = 0; n < 4; ++n)
+            {
+                coords.row(n) = mesh.vertices[element[n]];
+            }
+
+            if (!elementIntersectsRadius(coords, tip_point_global, Rout_h))
+            {
+                continue;
+            }
+
+            used_elements++;
+
+            const int elem_id_int = static_cast<int>(elem_id);
+            const int heaviside_index = heaviside_element_to_index[elem_id_int];
+
+            // ------------------------------------------------------------
+            // 1. Current crack-tip element: use tip triangulation
+            // ------------------------------------------------------------
+            if (elem_id_int == tip_data.id)
+            {
+                const TipTriangulation &triangulation = tip_enriched_triangulation[tip_idx];
+
+                std::array<Eigen::Vector2d, 6> local_points = {Eigen::Vector2d{-1.0, -1.0},
+                                                               Eigen::Vector2d{1.0, -1.0},
+                                                               Eigen::Vector2d{1.0, 1.0},
+                                                               Eigen::Vector2d{-1.0, 1.0},
+                                                               tip_data.intersection_point_local_coords,
+                                                               tip_data.tip_point_local_coords};
+
+                for (unsigned int tri_id = 0; tri_id < 5; ++tri_id)
                 {
-                    dNdx = dN_dx_dy(0, n);
-                    dNdy = dN_dx_dy(1, n);
-                    Nn = shape.N[n];
-                    // no enrnchment[edge]
-                    B(0, 10 * n) = dNdx; // du/dx
-                    B(0, 10 * n + 1) = 0;
-                    B(1, 10 * n) = 0;
-                    B(1, 10 * n + 1) = dNdy; // dv/dy
-                    B(2, 10 * n) = dNdy;     // dv/dx
-                    B(2, 10 * n + 1) = dNdx; // du/dy
+                    const std::array<unsigned char, 3> &triangle = triangulation.tri_indices[tri_id];
 
-                    // f_alpha
-                    for (int a = 0; a < 4; a++)
+                    Eigen::Matrix2d J_xieta_rs;
+                    J_xieta_rs << local_points[triangle[1]].x() - local_points[triangle[0]].x(),
+                        local_points[triangle[2]].x() - local_points[triangle[0]].x(),
+                        local_points[triangle[1]].y() - local_points[triangle[0]].y(),
+                        local_points[triangle[2]].y() - local_points[triangle[0]].y();
+
+                    const double det_tri = J_xieta_rs.determinant();
+
+                    for (unsigned int gp = 0; gp < NGauss; ++gp)
                     {
-                        shift = f[a] - f_nodes[n][a];
-                        B(0, 10 * n + 2 + 2 * a) = dNdx * shift + Nn * df_dx[a].x(); // du/dx
-                        B(0, 10 * n + 3 + 2 * a) = 0;
-                        B(1, 10 * n + 2 + 2 * a) = 0;
-                        B(1, 10 * n + 3 + 2 * a) = dNdy * shift + Nn * df_dx[a].y(); // dv/dy
-                        B(2, 10 * n + 2 + 2 * a) = dNdy * shift + Nn * df_dx[a].y(); // dv/dx
-                        B(2, 10 * n + 3 + 2 * a) = dNdx * shift + Nn * df_dx[a].x(); // du/dy
+                        const double r_tri = gauss_pts[gp][0];
+                        const double s_tri = gauss_pts[gp][1];
+                        const double t_tri = 1.0 - r_tri - s_tri;
+
+                        const double xi = local_points[triangle[0]].x() * t_tri +
+                                          local_points[triangle[1]].x() * r_tri + local_points[triangle[2]].x() * s_tri;
+
+                        const double eta = local_points[triangle[0]].y() * t_tri +
+                                           local_points[triangle[1]].y() * r_tri +
+                                           local_points[triangle[2]].y() * s_tri;
+
+                        LinearQuad::ShapeData tmp_shape = fillQuadShape(xi, eta);
+
+                        LinearTriangle::JacobianData tmp_jd;
+                        tmp_jd.J = tmp_shape.dN_xi_eta * coords;
+
+                        bool tmp_invertible = false;
+                        tmp_jd.J.computeInverseAndDetWithCheck(tmp_jd.invJ, tmp_jd.detJ, tmp_invertible, 1e-12);
+
+                        if (!tmp_invertible)
+                        {
+                            throw std::runtime_error("Jacobi matrix is not invertible");
+                        }
+
+                        const double weight = gauss_wts[gp] * std::abs(det_tri) * std::abs(tmp_jd.detJ);
+
+                        // forced_H_value = 0:
+                        // inside tip element we let H be determined by local x2
+                        integrateAtPoint(element, coords, xi, eta, weight, 0);
                     }
                 }
-                factor = gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
-                if (det_tri < 0)
-                    std::cout << "det_tri < 0" << std::endl;
-                if (jd.detJ < 0)
-                    std::cout << "jd.detJ < 0" << std::endl;
-                total_area += gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
+            }
 
-                Eigen::Vector3d strain = B * u_e;
-                // std::cout << "Strain: " << strain << '\n';
-                Eigen::Vector3d stress = D * B * u_e;
-                // std::cout << "Stress:" << stress << '\n';
+            // ------------------------------------------------------------
+            // 2. Heaviside-enriched element inside the patch:
+            //    use Heaviside triangulation, not regular 2x2 quadrature
+            // ------------------------------------------------------------
+            else if (heaviside_index >= 0)
+            {
+                const HeavisideEnriched &h_data = heaviside_enriched[heaviside_index];
 
-                double const sinthreehalves = std::sin(3.0 * theta / 2.0);
-                double const costhreehalves = std::cos(3.0 * theta / 2.0);
-                double const INV_SQRT_RADIUS = 1 / sqrt_r;
-                double const INV_SQRT_2PI_INV_SQRT_RADIUS = INV_SQRT_2PI * INV_SQRT_RADIUS;
-                Eigen::Vector3d sigma_aux_mode_1{coshalftheta * (1 - sinhalftheta * sinthreehalves),
-                                                 coshalftheta * (1 + sinhalftheta * sinthreehalves),
-                                                 sinhalftheta * coshalftheta * costhreehalves};
-                sigma_aux_mode_1 *= INV_SQRT_2PI_INV_SQRT_RADIUS;
-                Eigen::Vector3d sigma_aux_mode_2{-sinhalftheta * (2 + coshalftheta * costhreehalves),
-                                                 sinhalftheta * coshalftheta * costhreehalves,
-                                                 coshalftheta * (1 - sinhalftheta * sinthreehalves)};
-                sigma_aux_mode_2 *= INV_SQRT_2PI_INV_SQRT_RADIUS;
-                Eigen::Vector2d u_aux_mode_1{coshalftheta * (kolosov_constant - 1 + 2 * sinhalftheta * sinhalftheta),
-                                             sinhalftheta * (kolosov_constant + 1 - 2 * coshalftheta * coshalftheta)};
-                u_aux_mode_1 *= INV_2MU_INV_SQRT_2PI * sqrt_r;
-                /*
-                Deepseek:
-                Given the complexity, I will provide the direct formulas for the two needed displacement derivatives for
-                mode I (derived in many XFEM implementations). You can find them in the source code of open‑source XFEM
-                packages (e.g., Morfeo, GetFEM). Below is a clean, ready‑to‑implement set.
-                */
-                Eigen::Vector2d u_aux_mode_2{sinhalftheta * (kolosov_constant + 2 + costheta),
-                                             -coshalftheta * (kolosov_constant - 2 + costheta)};
-                u_aux_mode_2 *= INV_2MU_INV_SQRT_2PI * sqrt_r;
-                
-                const double du1_dx1_aux_mode_1 = 1.0 / (4.0 * shear_modulus) * INV_SQRT_2PI_INV_SQRT_RADIUS *
-                ((2*kolosov_constant - 1) * coshalftheta - costhreehalves);
-                const double du2_dx1_aux_mode_1 = 1.0 / (4.0 * shear_modulus) * INV_SQRT_2PI_INV_SQRT_RADIUS *
-                ((2*kolosov_constant + 1) * sinhalftheta - sinthreehalves);
+                const HeavisideTriangulation &h_triangulation = heaviside_enriched_triangulation[heaviside_index];
 
-                const double du1_dx1_aux_mode_2 = 1.0 / (4.0 * shear_modulus) * INV_SQRT_2PI_INV_SQRT_RADIUS *
-                (-(2*kolosov_constant + 3) * sinhalftheta + sinthreehalves);
-                const double du2_dx1_aux_mode_2 = 1.0 / (4.0 * shear_modulus) * INV_SQRT_2PI_INV_SQRT_RADIUS *
-                (-(2*kolosov_constant - 3) * coshalftheta + costhreehalves);
-                double du1_dx1_act = 0.0;
-                double du2_dx1_act = 0.0;
+                std::array<Eigen::Vector2d, 6> local_points = {Eigen::Vector2d{-1.0, -1.0},
+                                                               Eigen::Vector2d{1.0, -1.0},
+                                                               Eigen::Vector2d{1.0, 1.0},
+                                                               Eigen::Vector2d{-1.0, 1.0},
+                                                               h_data.intersection_points_local_coords[0],
+                                                               h_data.intersection_points_local_coords[1]};
 
-                for (int n = 0; n < 4; ++n) {
-                    const double dNdx_local = dN_dx_dy(0, n);
-                    const double Nn_local = shape.N[n];
+                for (unsigned int tri_id = 0; tri_id < h_triangulation.triangles_num; ++tri_id)
+                {
+                    const std::array<unsigned char, 3> &triangle = h_triangulation.tri_indices[tri_id];
 
-                    du1_dx1_act += dNdx_local * u_e[10 * n];
-                    du2_dx1_act += dNdx_local * u_e[10 * n + 1];
+                    const int forced_H_value = tri_id < h_triangulation.positive_heaviside_triangles_num ? 1 : -1;
 
-                    for (int a = 0; a < 4; ++a) {
-                        const double factor =
-                            dNdx_local * (f[a] - f_nodes[n][a])
-                            + Nn_local * df_dx[a].x();
+                    Eigen::Matrix2d J_xieta_rs;
+                    J_xieta_rs << local_points[triangle[1]].x() - local_points[triangle[0]].x(),
+                        local_points[triangle[2]].x() - local_points[triangle[0]].x(),
+                        local_points[triangle[1]].y() - local_points[triangle[0]].y(),
+                        local_points[triangle[2]].y() - local_points[triangle[0]].y();
 
-                        du1_dx1_act += factor * u_e[10 * n + 2 + 2 * a];
-                        du2_dx1_act += factor * u_e[10 * n + 3 + 2 * a];
+                    const double det_tri = J_xieta_rs.determinant();
+
+                    for (unsigned int gp = 0; gp < NGauss; ++gp)
+                    {
+                        const double r_tri = gauss_pts[gp][0];
+                        const double s_tri = gauss_pts[gp][1];
+                        const double t_tri = 1.0 - r_tri - s_tri;
+
+                        const double xi = local_points[triangle[0]].x() * t_tri +
+                                          local_points[triangle[1]].x() * r_tri + local_points[triangle[2]].x() * s_tri;
+
+                        const double eta = local_points[triangle[0]].y() * t_tri +
+                                           local_points[triangle[1]].y() * r_tri +
+                                           local_points[triangle[2]].y() * s_tri;
+
+                        LinearQuad::ShapeData tmp_shape = fillQuadShape(xi, eta);
+
+                        LinearTriangle::JacobianData tmp_jd;
+                        tmp_jd.J = tmp_shape.dN_xi_eta * coords;
+
+                        bool tmp_invertible = false;
+                        tmp_jd.J.computeInverseAndDetWithCheck(tmp_jd.invJ, tmp_jd.detJ, tmp_invertible, 1e-12);
+
+                        if (!tmp_invertible)
+                        {
+                            throw std::runtime_error("Jacobi matrix is not invertible");
+                        }
+
+                        const double weight = gauss_wts[gp] * std::abs(det_tri) * std::abs(tmp_jd.detJ);
+
+                        integrateAtPoint(element, coords, xi, eta, weight, forced_H_value);
                     }
                 }
-                double E = young_modulus;
-                double nu = poisson_ratio;
-                double invE = 1.0 / E;
+            }
 
-                // For mode I auxiliary
-                double eps11_aux1 = invE * (sigma_aux_mode_1(0) - nu * sigma_aux_mode_1(1));
-                double eps22_aux1 = invE * (sigma_aux_mode_1(1) - nu * sigma_aux_mode_1(0));
-                double eps12_aux1 = (1.0 + nu) / E * sigma_aux_mode_1(2);
-                // For mode II auxiliary
-                double eps11_aux2 = invE * (sigma_aux_mode_2(0) - nu * sigma_aux_mode_2(1));
-                double eps22_aux2 = invE * (sigma_aux_mode_2(1) - nu * sigma_aux_mode_2(0));
-                double eps12_aux2 = (1.0 + nu) / E * sigma_aux_mode_2(2);
+            // ------------------------------------------------------------
+            // 3. Regular element inside the patch:
+            //    use standard 2x2 quadrature
+            // ------------------------------------------------------------
+            else
+            {
+                const double g = 1.0 / std::sqrt(3.0);
+                const std::array<double, 2> gp_1d = {-g, g};
 
-                // Interaction strain energy density W(1,2)
-                double W12_1 = stress(0)*eps11_aux1 + stress(1)*eps22_aux1 + 2.0*stress(2)*eps12_aux1;
-                double W12_2 = stress(0)*eps11_aux2 + stress(1)*eps22_aux2 + 2.0*stress(2)*eps12_aux2;
+                for (double xi : gp_1d)
+                {
+                    for (double eta : gp_1d)
+                    {
+                        LinearQuad::ShapeData tmp_shape = fillQuadShape(xi, eta);
 
-                // Compute A1 and A2 for mode I (similar for mode II)
-                double A1_mode1 = stress(0)*du1_dx1_aux_mode_1 + stress(2)*du2_dx1_aux_mode_1   // σ1j * ∂uj/∂x1
-                                + sigma_aux_mode_1(0)*du1_dx1_act + sigma_aux_mode_1(2)*du2_dx1_act
-                                - W12_1;
-                double A2_mode1 = stress(2)*du1_dx1_aux_mode_1 + stress(1)*du2_dx1_aux_mode_1
-                                + sigma_aux_mode_1(2)*du1_dx1_act + sigma_aux_mode_1(1)*du2_dx1_act;
+                        LinearTriangle::JacobianData tmp_jd;
+                        tmp_jd.J = tmp_shape.dN_xi_eta * coords;
 
-                // Same for mode II
-                double A1_mode2 = stress(0)*du1_dx1_aux_mode_2 + stress(2)*du2_dx1_aux_mode_2
-                                + sigma_aux_mode_2(0)*du1_dx1_act + sigma_aux_mode_2(2)*du2_dx1_act
-                                - W12_2;
-                double A2_mode2 = stress(2)*du1_dx1_aux_mode_2 + stress(1)*du2_dx1_aux_mode_2
-                                + sigma_aux_mode_2(2)*du1_dx1_act + sigma_aux_mode_2(1)*du2_dx1_act;
-                double Rin = 0.1 * 0.1;  // you need to compute element_size for this element
-                double Rout = 2.0 * 0.1;  // or a constant for all elements
-                double q = 0.0;
-                double dqdr = 0.0;
-                if (radius <= Rin) {
-                    q = 1.0;
-                    dqdr = 0.0;
-                } else if (radius >= Rout) {
-                    q = 0.0;
-                    dqdr = 0.0;
-                } else {
-                    q = (Rout - radius) / (Rout - Rin);
-                    dqdr = -1.0 / (Rout - Rin);
+                        bool tmp_invertible = false;
+                        tmp_jd.J.computeInverseAndDetWithCheck(tmp_jd.invJ, tmp_jd.detJ, tmp_invertible, 1e-12);
+
+                        if (!tmp_invertible)
+                        {
+                            throw std::runtime_error("Jacobi matrix is not invertible");
+                        }
+
+                        const double weight = std::abs(tmp_jd.detJ);
+
+                        integrateAtPoint(element, coords, xi, eta, weight, 0);
+                    }
                 }
-                const Eigen::Vector2d& t_vec =
-                    enriched_element.tip_index == 1 ? crack_tip_1_t : crack_tip_2_t;
-
-                const Eigen::Vector2d& n_vec =
-                    enriched_element.tip_index == 1 ? crack_tip_1_n : crack_tip_2_n;
-
-                double x1 = d.dot(t_vec);
-                double x2 = d.dot(n_vec);
-
-                double dqdx1 = dqdr * x1 / radius;
-                double dqdx2 = dqdr * x2 / radius;
-                double integrand1 = A1_mode1 * dqdx1 + A2_mode1 * dqdx2;
-                double integrand2 = A1_mode2 * dqdx1 + A2_mode2 * dqdx2;
-
-                double weight = gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
-                I_mode1 += integrand1 * weight;
-                I_mode2 += integrand2 * weight;
             }
         }
-        double E_prime = young_modulus; // plane stress
-        // if plane strain: E_prime = young_modulus / (1.0 - poisson_ratio*poisson_ratio);
-        double K_I  = 0.5 * E_prime * I_mode1;
-        double K_II = 0.5 * E_prime * I_mode2;
-        std::cout << K_I << " " << K_II << std::endl;
+
+        const double E_prime = E; // plane stress
+        // plane strain:
+        // const double E_prime = E / (1.0 - nu * nu);
+
+        const double K_I = 0.5 * E_prime * I_mode1;
+        const double K_II = 0.5 * E_prime * I_mode2;
+
+        std::cout << "tip_index = " << static_cast<int>(tip_data.tip_index) << ", used_elements = " << used_elements
+                  << ", K_I = " << K_I << ", K_II = " << K_II
+                  << ", |KII/KI| = " << (std::abs(K_I) > 1e-14 ? std::abs(K_II / K_I) : 0.0) << std::endl;
     }
 }
 
 // It turns out that for templates we need to either implement a function in a header file or explicitly create a
 // template as shown below
-template void computeStress<13>(const std::vector<TipEnriched> &tip_enriched, const QuadMesh &mesh,
-                                const std::vector<TipTriangulation> &tip_enriched_triangulation,
-                                const Eigen::VectorXd &u_solu, const std::vector<unsigned int> &node_offset,
-                                const std::vector<bool> &heaviside_enriched_nodes,
-                                const std::array<std::array<double, 2>, 13> &gauss_pts,
-                                const std::array<double, 13> &gauss_wts, const Eigen::Vector2d &crack_tip_1_t,
-                                const Eigen::Vector2d &crack_tip_1_n, const Eigen::Vector2d &crack_tip_2_t,
-                                const Eigen::Vector2d &crack_tip_2_n, const Eigen::Matrix3d &D,
-                                const double young_modulus, const double poisson_ratio);
+template void computeStress<13>(
+    const std::vector<TipEnriched> &tip_enriched, const std::vector<HeavisideEnriched> &heaviside_enriched,
+    const QuadMesh &mesh, const std::vector<TipTriangulation> &tip_enriched_triangulation,
+    const std::vector<HeavisideTriangulation> &heaviside_enriched_triangulation, const Eigen::VectorXd &u_solu,
+    const std::vector<unsigned int> &node_offset, const std::vector<bool> &heaviside_enriched_nodes,
+    const std::vector<bool> &tip_enriched_nodes, const std::vector<LevelSetSign> &vertices_level_set_signs,
+    const std::array<std::array<double, 2>, 13> &gauss_pts, const std::array<double, 13> &gauss_wts,
+    const Eigen::Vector2d &crack_tip_1_t, const Eigen::Vector2d &crack_tip_1_n, const Eigen::Vector2d &crack_tip_2_t,
+    const Eigen::Vector2d &crack_tip_2_n, const Eigen::Matrix3d &D, const double young_modulus,
+    const double poisson_ratio, const double Rin, const double Rout);

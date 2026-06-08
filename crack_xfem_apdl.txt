@@ -1,0 +1,193 @@
+FINISH
+/CLEAR,NOSTART
+
+/PREP7
+
+! ============================================================
+! XFEM EDGE CRACK MODEL
+! Full plate model, crack is inserted by XFEM level-set data
+! Geometry equivalent to your half model:
+! W = 1
+! full height H = 1  because your old model had height 0.5
+! crack length a = 0.3
+! crack lies from x = 0 to x = a at y = 0
+! ============================================================
+
+! -----------------------------
+! Parameters
+! -----------------------------
+*SET,a,0.3
+*SET,W,1
+*SET,H,1
+*SET,sigma,20000
+*SET,mesh_size,0.009
+
+! XFEM parameters
+*SET,enrich_band,0.12
+*SET,tip_radius,0.05
+
+! Mesh divisions
+! IMPORTANT:
+! use odd numbers so y=0 is NOT a node line.
+! Crack must not pass through mesh nodes.
+*SET,nx,101
+*SET,ny,101
+
+*SET,dx,W/nx
+*SET,dy,H/ny
+
+! -----------------------------
+! Element and material
+! -----------------------------
+ET,1,PLANE182
+KEYOPT,1,3,0      ! plane stress, same basic type as your old model
+KEYOPT,1,6,0
+
+MPDATA,EX,1,,2e11
+MPDATA,PRXY,1,,0.3
+
+! -----------------------------
+! Full uncracked rectangle
+! x: 0..W
+! y: -H/2..H/2
+! -----------------------------
+BLC4,0,-H/2,W,H
+
+! Structured mesh
+TYPE,1
+MAT,1
+
+! Set divisions on area lines
+! Depending on line numbering, this normally works for BLC4:
+LESIZE,1,,,nx
+LESIZE,2,,,ny
+LESIZE,3,,,nx
+LESIZE,4,,,ny
+
+MSHKEY,1
+AMESH,1
+ALLSEL,ALL
+
+! ============================================================
+! XFEM ENRICHMENT REGION
+! ============================================================
+! Select elements around the crack and crack tip.
+! Do not enrich the whole model unless necessary.
+
+ESEL,S,CENT,X,0,a+enrich_band
+ESEL,R,CENT,Y,-enrich_band,enrich_band
+CM,XFEM_ZONE,ELEM
+ALLSEL,ALL
+
+! Define XFEM enrichment.
+! SING = singularity-based XFEM.
+! tip_radius controls the area around crack tip influenced by singular functions.
+XFENRICH,ENRICH1,XFEM_ZONE,,SING,tip_radius
+
+! ============================================================
+! INITIAL CRACK BY LEVEL-SET VALUES
+! Crack line: y = 0, from x = 0 to x = a
+!
+! PHI = signed distance from crack surface
+!      for horizontal crack: PHI = y
+!
+! PSI = signed distance from crack front/tip
+!      crack tip at x = a, so PSI = x - a
+! ============================================================
+
+! Select elements cut by the crack surface.
+! These are elements around y=0 and x from 0 to a.
+
+ESEL,S,CENT,X,0,a
+ESEL,R,CENT,Y,-dy,dy
+CM,CRACK_CUT_ELEMS,ELEM
+
+! Give PHI and PSI for every node of selected cracked elements.
+iel = 0
+
+*GET,ne_crack,ELEM,0,COUNT
+
+*DO,i,1,ne_crack,1
+    iel = ELNEXT(iel)
+
+    *IF,iel,NE,0,THEN
+        *DO,j,1,4,1
+            nd = NELEM(iel,j)
+
+            phi = NY(nd)       ! distance from crack line y=0
+            psi = NX(nd) - a   ! distance from crack tip x=a
+
+            XFDATA,ENRICH1,LSM,iel,nd,phi,psi
+        *ENDDO
+    *ENDIF
+*ENDDO
+
+ALLSEL,ALL
+
+! Print XFEM crack data for checking.
+XFLIST
+
+! ============================================================
+! CRACK TIP ELEMENT COMPONENT FOR CINT,CXFE
+! ============================================================
+! For XFEM CINT we do not use CTNC crack-tip node.
+! We use CXFE with crack-tip element/component.
+
+ESEL,S,CENT,X,a-dx,a+dx
+ESEL,R,CENT,Y,-dy,dy
+CM,CRACK_TIP_ELEM,ELEM
+ALLSEL,ALL
+
+! ============================================================
+! Boundary conditions and loads
+! Full model, symmetric tension by pressure on top and bottom
+! ============================================================
+
+! Top face pressure
+NSEL,S,LOC,Y,H/2
+SF,ALL,PRES,-sigma
+ALLSEL,ALL
+
+! Bottom face pressure
+NSEL,S,LOC,Y,-H/2
+SF,ALL,PRES,-sigma
+ALLSEL,ALL
+
+! Remove rigid body motion.
+! Fix a small region near right-center.
+NSEL,S,LOC,X,W
+NSEL,R,LOC,Y,-dy,dy
+D,ALL,ALL,0
+ALLSEL,ALL
+
+! ============================================================
+! CINT for XFEM stationary crack
+! ============================================================
+
+CINT,NEW,1
+CINT,TYPE,SIFS
+CINT,CXFE,CRACK_TIP_ELEM
+CINT,NCON,5
+CINT,NORM,0,2
+
+FINISH
+
+/SOLU
+ANTYPE,STATIC
+OUTRES,ALL,ALL
+SOLVE
+FINISH
+
+/POST1
+SET,LAST
+
+/OUT,xfem_sif_results,txt
+/COM ==========================================
+/COM XFEM SIF RESULTS
+/COM ==========================================
+PRCINT,1,,K1
+PRCINT,1,,K2
+/OUT
+
+PRCINT,1,,K1
+PRCINT,1,,K2

@@ -1,0 +1,109 @@
+FINISH  ! Make sure we are at BEGIN level   
+/CLEAR,NOSTART  ! Clear model since no SAVE found   
+
+/PREP7  
+!*  
+ET,1,PLANE182   
+!*  
+!*  
+MPTEMP,,,,,,,,  
+MPTEMP,1,0  
+MPDATA,EX,1,,2e11   
+MPDATA,PRXY,1,,0.3  
+*SET,a,0.3  
+*SET,W,1
+K, ,,,, 
+K, ,a,,,
+K, ,W,,,
+K, ,W,0.5,,   
+K, ,0,0.5,,   
+FLST,2,5,3  
+FITEM,2,1   
+FITEM,2,2   
+FITEM,2,3   
+FITEM,2,4   
+FITEM,2,5   
+A,P51X  
+FLST,2,1,4,ORDE,1   
+FITEM,2,2   
+!*  
+/GO 
+DL,2,,UY,0
+NSEL,S,LOC,X,W
+NSEL,R,LOC,Y,0
+D,ALL,UX,0
+ALLSEL,ALL
+*SET,sigma,10000
+FLST,2,1,4,ORDE,1   
+FITEM,2,4   
+/GO 
+!*  
+SFL,P51X,PRES,-sigma,   
+FLST,2,1,5,ORDE,1   
+FITEM,2,1   
+*SET,mesh_size,0.005 
+FLST,2,1,5,ORDE,1   
+FITEM,2,1   
+AESIZE,P51X,mesh_size,    
+ASEL, , , ,       1 
+MSHKEY,1
+AMAP,1,1,3,4,5
+allsel,all
+sbctran
+
+! --- Find crack tip node ---
+nsel, s, loc, x, a
+nsel, r, loc, y, 0
+*get, tip_node, node, 0, num, min
+! Create a component for the crack tip (required by CINT,CTNC)
+cm, CRACK_TIP_CM, node
+
+allsel,all
+! --- Select nodes on your only crack surface (e.g., line from 0 to 0.3) ---
+lsel, s, line, , 1      ! Select the line representing the crack surface
+nsll, s, 1              ! Get all nodes on that line
+cm, bottom_face, node   ! Create a node component named 'bottom_face'
+
+! --- Define an empty component for the other side (since it's an edge crack) ---
+*del, top_face          ! Delete if it exists
+cm, top_face, node      ! Create an empty component
+
+allsel,all
+
+! --- CINT crack definition ---
+cint, new, 1
+cint, type, sifs
+cint, ctnc, CRACK_TIP_CM          ! Use the component name, not tip_node number
+cint, norm, 0, 2
+cint, ncon, 5
+cint, symm, on                    ! Mode I only (KII=0)
+cint, umm, off                    ! Required when using CINT,SURF
+
+
+finish
+/solu
+solve
+finish
+/POST1
+SET,LAST
+
+*GET,tip_from_cint,CINT,1,NODE,1
+
+*GET,ki1,CINT,1,CTIP,tip_from_cint,CONTOUR,1,DTYPE,K1
+*GET,kii1,CINT,1,CTIP,tip_from_cint,CONTOUR,1,DTYPE,K2
+
+*GET,ki2,CINT,1,CTIP,tip_from_cint,CONTOUR,2,DTYPE,K1
+*GET,kii2,CINT,1,CTIP,tip_from_cint,CONTOUR,2,DTYPE,K2
+
+*GET,ki3,CINT,1,CTIP,tip_from_cint,CONTOUR,3,DTYPE,K1
+*GET,kii3,CINT,1,CTIP,tip_from_cint,CONTOUR,3,DTYPE,K2
+
+
+*GET,ki4,CINT,1,CTIP,tip_from_cint,CONTOUR,4,DTYPE,K1
+*GET,kii4,CINT,1,CTIP,tip_from_cint,CONTOUR,4,DTYPE,K2
+
+*GET,ki5,CINT,1,CTIP,tip_from_cint,CONTOUR,5,DTYPE,K1
+*GET,kii5,CINT,1,CTIP,tip_from_cint,CONTOUR,5,DTYPE,K2
+*STATUS
+
+PRCINT,1

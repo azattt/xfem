@@ -1,0 +1,6 @@
+for a = 0.3 W = 1
+KI1                               17132.2282                  SCALAR
+ KI2                               17797.2570                  SCALAR
+ KI3                               17831.8159                  SCALAR
+ KI4                               17838.4511                  SCALAR
+ KI5                               17840.8163                  SCALAR
