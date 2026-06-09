@@ -6,255 +6,619 @@
 constexpr double PI = 3.14159265358979323846;
 constexpr double INV_SQRT_2PI = 0.3989422804014327; // 1/sqrt(2π)
 
-void drawHeavisideElements(const std::vector<HeavisideEnriched> &heaviside_enriched, const QuadMesh &mesh,
-                           const std::vector<HeavisideTriangulation> &heaviside_enriched_triangulation,
-                           const std::vector<LevelSetSign> &vertices_level_set_signs, const Eigen::VectorXd &u_solu,
-                           const std::vector<unsigned int> &node_offset,
-                           const std::vector<bool> &heaviside_enriched_nodes, double scale)
+void drawHeavisideElements(
+    const std::vector<HeavisideEnriched>& heaviside_enriched,
+    const QuadMesh& mesh,
+    const std::vector<HeavisideTriangulation>& heaviside_enriched_triangulation,
+    const std::vector<LevelSetSign>& vertices_level_set_signs,
+    const Eigen::VectorXd& u_solu,
+    const std::vector<unsigned int>& node_offset,
+    const std::vector<bool>& heaviside_enriched_nodes,
+    double scale
+)
 {
-    
-    for (int i = 0; i < heaviside_enriched.size(); i++)
-    {
-        const HeavisideEnriched &hvsd_enr = heaviside_enriched[i];
-        const std::array<int, 4> &element = mesh.elements[hvsd_enr.id];
-        const HeavisideTriangulation &hvsd_trng = heaviside_enriched_triangulation[i];
-        std::array<Eigen::Vector2d, 6> points;
-        points[0] = Eigen::Vector2d(-1, -1);
-        points[1] = Eigen::Vector2d(1, -1);
-        points[2] = Eigen::Vector2d(1, 1);
-        points[3] = Eigen::Vector2d(-1, 1);
-        points[4] = hvsd_enr.intersection_points_local_coords[0];
-        points[5] = hvsd_enr.intersection_points_local_coords[1];
+    auto quadShape = [](double xi, double eta) -> Eigen::RowVector4d {
+        return Eigen::RowVector4d{
+            0.25 * (1.0 - xi) * (1.0 - eta),
+            0.25 * (1.0 + xi) * (1.0 - eta),
+            0.25 * (1.0 + xi) * (1.0 + eta),
+            0.25 * (1.0 - xi) * (1.0 + eta)
+        };
+    };
 
-        Eigen::Matrix<double, 4, 2> u;
-        u.row(0) = u_solu.segment<2>(node_offset[element[0]]) * scale + mesh.vertices[element[0]];
-        u.row(1) = u_solu.segment<2>(node_offset[element[1]]) * scale + mesh.vertices[element[1]];
-        u.row(2) = u_solu.segment<2>(node_offset[element[2]]) * scale + mesh.vertices[element[2]];
-        u.row(3) = u_solu.segment<2>(node_offset[element[3]]) * scale + mesh.vertices[element[3]];
-        Eigen::Matrix<double, 4, 2> a;
-        for (int n = 0; n < 4; n++)
+    for (int h_id = 0; h_id < static_cast<int>(heaviside_enriched.size()); ++h_id)
+    {
+        const HeavisideEnriched& hvsd_enr = heaviside_enriched[h_id];
+        const std::array<int, 4>& element = mesh.elements[hvsd_enr.id];
+        const HeavisideTriangulation& hvsd_trng =
+            heaviside_enriched_triangulation[h_id];
+
+        std::array<Eigen::Vector2d, 6> local_points;
+        local_points[0] = Eigen::Vector2d{-1.0, -1.0};
+        local_points[1] = Eigen::Vector2d{ 1.0, -1.0};
+        local_points[2] = Eigen::Vector2d{ 1.0,  1.0};
+        local_points[3] = Eigen::Vector2d{-1.0,  1.0};
+        local_points[4] = hvsd_enr.intersection_points_local_coords[0];
+        local_points[5] = hvsd_enr.intersection_points_local_coords[1];
+
+        Eigen::Matrix<double, 4, 2> vertices;
+        Eigen::Matrix<double, 4, 2> u_std;
+        Eigen::Matrix<double, 4, 2> a_h;
+
+        for (int n = 0; n < 4; ++n)
         {
-            if (heaviside_enriched_nodes[element[n]])
+            const int node = element[n];
+            const int off = node_offset[node];
+
+            vertices.row(n) = mesh.vertices[node];
+
+            u_std.row(n) =
+                u_solu.segment<2>(off).transpose() * scale;
+
+            if (heaviside_enriched_nodes[node])
             {
-                // TODO: fix for variable amount of DOFs
-                // a.col(0) = u[node_offset[element[0]]];
-                a.row(n) = u_solu.segment<2>(node_offset[element[n]] + 2) * scale;
+                a_h.row(n) =
+                    u_solu.segment<2>(off + 2).transpose() * scale;
             }
             else
             {
-                a.row(n).setZero();
+                a_h.row(n).setZero();
             }
         }
-        Eigen::RowVector4d factor;
-        for (int j = 0; j < 4; j++)
-        {
-            factor(j) = 1 - vertices_level_set_signs[element[j]].sign;
-        }
-        for (int j = 0; j < hvsd_trng.positive_heaviside_triangles_num; j++)
-        {
-            std::array<Eigen::Vector2d, 3> v;
-            for (int k = 0; k < 3; k++)
+
+        auto evalHeavisidePoint = [&](
+            double xi,
+            double eta,
+            int H_value
+        ) -> Eigen::Vector2d {
+            const Eigen::RowVector4d N = quadShape(xi, eta);
+
+            Eigen::Vector2d p =
+                (N * vertices).transpose();
+
+            p += (N * u_std).transpose();
+
+            for (int n = 0; n < 4; ++n)
             {
-                double xi = points[hvsd_trng.tri_indices[j][k]].x(), eta = points[hvsd_trng.tri_indices[j][k]].y();
-                Eigen::RowVector4d N{(1 - xi) * (1 - eta), (1 + xi) * (1 - eta), (1 + xi) * (1 + eta),
-                                     (1 - xi) * (1 + eta)};
-                N /= 4;
-                v[k] = N * u;
-                for (int i = 0; i < 4; ++i)
-                {
-                    v[k] += N[i] * factor[i] * a.row(i);
-                }
+                const int node = element[n];
+
+                const double H_i =
+                    static_cast<double>(
+                        vertices_level_set_signs[node].sign
+                    );
+
+                const double H_shift =
+                    static_cast<double>(H_value) - H_i;
+
+                p += N[n] * H_shift * a_h.row(n).transpose();
             }
-            TriangleGUI::Renderer::instance().addTriangle(TriangleGUI::TriangleColored{
-                toGlm(v[0].cast<float>().eval()), toGlm(v[1].cast<float>().eval()), toGlm(v[2].cast<float>().eval()),
-                TriangleGUI::packColor(glm::vec4{0.0, 1.0, 0.0, 1.0})});
-        }
-        for (int j = 0; j < 4; j++)
-        {
-            factor(j) = -1 - vertices_level_set_signs[element[j]].sign;
-        }
-        for (int j = hvsd_trng.positive_heaviside_triangles_num; j < hvsd_trng.triangles_num; j++)
-        {
-            std::array<Eigen::Vector2d, 3> v;
-            for (int k = 0; k < 3; k++)
+
+            return p;
+        };
+
+        auto drawSide = [&](
+            int tri_begin,
+            int tri_end,
+            int H_value,
+            const glm::vec4& color
+        ) {
+            for (int tri_id = tri_begin; tri_id < tri_end; ++tri_id)
             {
-                double xi = points[hvsd_trng.tri_indices[j][k]].x(), eta = points[hvsd_trng.tri_indices[j][k]].y();
-                Eigen::RowVector4d N{(1 - xi) * (1 - eta), (1 + xi) * (1 - eta), (1 + xi) * (1 + eta),
-                                     (1 - xi) * (1 + eta)};
-                N /= 4;
-                v[k] = N * u;
-                for (int i = 0; i < 4; ++i)
+                std::array<Eigen::Vector2d, 3> v;
+
+                for (int k = 0; k < 3; ++k)
                 {
-                    v[k] += N[i] * factor[i] * a.row(i);
+                    const unsigned char local_id =
+                        hvsd_trng.tri_indices[tri_id][k];
+
+                    const double xi =
+                        local_points[local_id].x();
+
+                    const double eta =
+                        local_points[local_id].y();
+
+                    v[k] = evalHeavisidePoint(xi, eta, H_value);
                 }
+
+                TriangleGUI::Renderer::instance().addTriangle(
+                    TriangleGUI::TriangleColored{
+                        toGlm(v[0].cast<float>().eval()),
+                        toGlm(v[1].cast<float>().eval()),
+                        toGlm(v[2].cast<float>().eval()),
+                        TriangleGUI::packColor(color)
+                    }
+                );
             }
-            TriangleGUI::Renderer::instance().addTriangle(TriangleGUI::TriangleColored{
-                toGlm(v[0].cast<float>().eval()), toGlm(v[1].cast<float>().eval()), toGlm(v[2].cast<float>().eval()),
-                TriangleGUI::packColor(glm::vec4{0.0, 0.0, 1.0, 1.0})});
-        }
+        };
+
+        // Верхняя/первая сторона
+        drawSide(
+            0,
+            hvsd_trng.positive_heaviside_triangles_num,
+            +1,
+            glm::vec4{0.0, 1.0, 0.0, 1.0}
+        );
+
+        // Нижняя/вторая сторона
+        drawSide(
+            hvsd_trng.positive_heaviside_triangles_num,
+            hvsd_trng.triangles_num,
+            -1,
+            glm::vec4{0.0, 0.0, 1.0, 1.0}
+        );
     }
 }
 
-void drawTipElements(const std::vector<TipEnriched> &tip_enriched, const QuadMesh &mesh, const Eigen::VectorXd &u_solu,
-                     const std::vector<unsigned int> &node_offset, const std::vector<bool> &heaviside_enriched_nodes,
-                     const std::vector<bool> &tip_enriched_nodes, double scale,
-                     std::vector<PolygonalChain> &polygonal_chains, const Eigen::Vector2d &crack_tip_1_t,
-                     const Eigen::Vector2d &crack_tip_1_n, const Eigen::Vector2d &crack_tip_2_t,
-                     const Eigen::Vector2d &crack_tip_2_n)
+void drawTipElements(
+    const std::vector<TipEnriched>& tip_enriched,
+    const std::vector<HeavisideEnriched>& heaviside_enriched,
+    const QuadMesh& mesh,
+    const Eigen::VectorXd& u_solu,
+    const std::vector<unsigned int>& node_offset,
+    const std::vector<bool>& heaviside_enriched_nodes,
+    const std::vector<bool>& tip_enriched_nodes,
+    const std::vector<LevelSetSign>& vertices_level_set_signs,
+    double scale,
+    std::vector<PolygonalChain>& polygonal_chains,
+    const Eigen::Vector2d& crack_tip_1_t,
+    const Eigen::Vector2d& crack_tip_1_n,
+    const Eigen::Vector2d& crack_tip_2_t,
+    const Eigen::Vector2d& crack_tip_2_n
+)
 {
-    for (int i = 0; i < tip_enriched.size(); i++)
-    {
-        const TipEnriched &tip_enr = tip_enriched[i];
-        const std::array<int, 4> &element = mesh.elements[tip_enr.id];
-        // const TipTriangulation& tip_trng = tip_enriched_triangulation[i];
-        constexpr int N_points = 100;
-        const Eigen::Vector2d tip_point_global_coords =
-            mesh.vertices[element[0]] * (1 - tip_enr.tip_point_local_coords.x()) *
-                (1 - tip_enr.tip_point_local_coords.y()) / 4 +
-            mesh.vertices[element[1]] * (1 + tip_enr.tip_point_local_coords.x()) *
-                (1 - tip_enr.tip_point_local_coords.y()) / 4 +
-            mesh.vertices[element[2]] * (1 + tip_enr.tip_point_local_coords.x()) *
-                (1 + tip_enr.tip_point_local_coords.y()) / 4 +
-            mesh.vertices[element[3]] * (1 - tip_enr.tip_point_local_coords.x()) *
-                (1 + tip_enr.tip_point_local_coords.y()) / 4;
-        const Eigen::Vector2d intersection_point_global_coords =
-            mesh.vertices[element[0]] * (1 - tip_enr.intersection_point_local_coords.x()) *
-                (1 - tip_enr.intersection_point_local_coords.y()) / 4 +
-            mesh.vertices[element[1]] * (1 + tip_enr.intersection_point_local_coords.x()) *
-                (1 - tip_enr.intersection_point_local_coords.y()) / 4 +
-            mesh.vertices[element[2]] * (1 + tip_enr.intersection_point_local_coords.x()) *
-                (1 + tip_enr.intersection_point_local_coords.y()) / 4 +
-            mesh.vertices[element[3]] * (1 - tip_enr.intersection_point_local_coords.x()) *
-                (1 + tip_enr.intersection_point_local_coords.y()) / 4;
-        const Eigen::Vector2d crack_dir = tip_point_global_coords - intersection_point_global_coords;
-        const Eigen::Vector2d crack_dir_local =
-            tip_enr.tip_point_local_coords - tip_enr.intersection_point_local_coords;
-        const double L = crack_dir_local.norm();
-        Eigen::Matrix<double, 4, 2> u;
-        u.row(0) = u_solu.segment<2>(node_offset[element[0]]) * scale;
-        u.row(1) = u_solu.segment<2>(node_offset[element[1]]) * scale;
-        u.row(2) = u_solu.segment<2>(node_offset[element[2]]) * scale;
-        u.row(3) = u_solu.segment<2>(node_offset[element[3]]) * scale;
-        std::array<Eigen::Matrix<double, 4, 2>, 4> b_nodes; // a_nodes[n][a][component]
+    auto quadShape = [](double xi, double eta) -> Eigen::RowVector4d {
+        return Eigen::RowVector4d{
+            0.25 * (1.0 - xi) * (1.0 - eta),
+            0.25 * (1.0 + xi) * (1.0 - eta),
+            0.25 * (1.0 + xi) * (1.0 + eta),
+            0.25 * (1.0 - xi) * (1.0 + eta)
+        };
+    };
+
+    auto elementSize = [](
+        const Eigen::Matrix<double, 4, 2>& vertices
+    ) -> double {
+        return 0.25 *
+            (
+                (vertices.row(1) - vertices.row(0)).norm() +
+                (vertices.row(2) - vertices.row(1)).norm() +
+                (vertices.row(3) - vertices.row(2)).norm() +
+                (vertices.row(0) - vertices.row(3)).norm()
+            );
+    };
+
+    auto evalGlobalFromLocal = [&](
+        const std::array<int, 4>& element,
+        double xi,
+        double eta
+    ) -> Eigen::Vector2d {
+        const Eigen::RowVector4d N = quadShape(xi, eta);
+
+        Eigen::Vector2d p = Eigen::Vector2d::Zero();
+
         for (int n = 0; n < 4; ++n)
         {
-            if (!tip_enriched_nodes[element[n]])
+            p += N[n] * mesh.vertices[element[n]];
+        }
+
+        return p;
+    };
+
+    auto evalHeavisideDisplacement = [&](
+        const HeavisideEnriched& h_enr,
+        double xi,
+        double eta,
+        int H_value
+    ) -> Eigen::Vector2d {
+        const std::array<int, 4>& element =
+            mesh.elements[h_enr.id];
+
+        const Eigen::RowVector4d N = quadShape(xi, eta);
+
+        Eigen::Vector2d p = Eigen::Vector2d::Zero();
+
+        for (int n = 0; n < 4; ++n)
+        {
+            const int node = element[n];
+            const int off = node_offset[node];
+
+            p += N[n] * mesh.vertices[node];
+
+            p += N[n] *
+                 u_solu.segment<2>(off) *
+                 scale;
+
+            if (heaviside_enriched_nodes[node])
             {
-                throw std::runtime_error("NotImplemented: not tip enriched node!!!");
+                const double H_i =
+                    static_cast<double>(
+                        vertices_level_set_signs[node].sign
+                    );
+
+                const double H_shift =
+                    static_cast<double>(H_value) - H_i;
+
+                p += N[n] *
+                     H_shift *
+                     u_solu.segment<2>(off + 2) *
+                     scale;
             }
-            int base = node_offset[element[n]];
-            // int offset = 2;
-            // if (heaviside_enriched_nodes[element[n]]) offset += 2;
-            int offset = 4;
+        }
+
+        return p;
+    };
+
+    for (int tip_id = 0; tip_id < static_cast<int>(tip_enriched.size()); ++tip_id)
+    {
+        const TipEnriched& tip_enr = tip_enriched[tip_id];
+        const std::array<int, 4>& element =
+            mesh.elements[tip_enr.id];
+
+        constexpr int N_points = 100;
+
+        Eigen::Matrix<double, 4, 2> vertices;
+
+        for (int n = 0; n < 4; ++n)
+        {
+            vertices.row(n) = mesh.vertices[element[n]];
+        }
+
+        const double xi_tip =
+            tip_enr.tip_point_local_coords.x();
+
+        const double eta_tip =
+            tip_enr.tip_point_local_coords.y();
+
+        const double xi_inter =
+            tip_enr.intersection_point_local_coords.x();
+
+        const double eta_inter =
+            tip_enr.intersection_point_local_coords.y();
+
+        const Eigen::Vector2d tip_point_global_coords =
+            evalGlobalFromLocal(element, xi_tip, eta_tip);
+
+        const Eigen::Vector2d intersection_point_global_coords =
+            evalGlobalFromLocal(element, xi_inter, eta_inter);
+
+        const Eigen::Vector2d crack_dir_local =
+            tip_enr.tip_point_local_coords -
+            tip_enr.intersection_point_local_coords;
+
+        Eigen::Matrix<double, 4, 2> u_std;
+
+        for (int n = 0; n < 4; ++n)
+        {
+            const int node = element[n];
+            const int off = node_offset[node];
+
+            u_std.row(n) =
+                u_solu.segment<2>(off).transpose() * scale;
+        }
+
+        std::array<Eigen::Matrix<double, 4, 2>, 4> b_nodes;
+
+        for (int n = 0; n < 4; ++n)
+        {
+            const int node = element[n];
+
+            if (!tip_enriched_nodes[node])
+            {
+                throw std::runtime_error(
+                    "drawTipElements: not tip enriched node"
+                );
+            }
+
+            const int off = node_offset[node];
+            const int offset_tip = 4;
+
             for (int a = 0; a < 4; ++a)
             {
-                b_nodes[n](a, 0) = u_solu(base + offset + 2 * a) * scale;
-                b_nodes[n](a, 1) = u_solu(base + offset + 2 * a + 1) * scale;
+                b_nodes[n](a, 0) =
+                    u_solu(off + offset_tip + 2 * a) * scale;
+
+                b_nodes[n](a, 1) =
+                    u_solu(off + offset_tip + 2 * a + 1) * scale;
             }
         }
-        std::vector<glm::vec2> upper_points;
-        std::vector<glm::vec2> lower_points;
-        Eigen::Matrix<double, 4, 2> vertices;
-        vertices.row(0) = mesh.vertices[element[0]];
-        vertices.row(1) = mesh.vertices[element[1]];
-        vertices.row(2) = mesh.vertices[element[2]];
-        vertices.row(3) = mesh.vertices[element[3]];
+
+        const Eigen::Vector2d t_vec =
+            (
+                tip_enr.tip_index == 1
+                    ? crack_tip_1_t
+                    : crack_tip_2_t
+            ).normalized();
+
+        const Eigen::Vector2d n_vec =
+            (
+                tip_enr.tip_index == 1
+                    ? crack_tip_1_n
+                    : crack_tip_2_n
+            ).normalized();
 
         std::array<std::array<double, 4>, 4> f_nodes;
-        Eigen::Vector2d d;
-        double radius, radius2, theta, sqrt_r, sinhalftheta, sintheta, coshalftheta, costheta;
-        std::cout << "tip 1 " << crack_tip_1_n << '\n' << crack_tip_1_t << std::endl;
-        std::cout << "tip 2 " << crack_tip_2_n << '\n' << crack_tip_2_t << std::endl;
-        for (int n = 0; n < 4; n++)
+
+        for (int n = 0; n < 4; ++n)
         {
-            double xi_tip = tip_enr.tip_point_local_coords.x();
-            double eta_tip = tip_enr.tip_point_local_coords.y();
-            std::array<double, 4> N_tip;
+            const Eigen::Vector2d d =
+                vertices.row(n).transpose() -
+                tip_point_global_coords;
 
-            d = (vertices.row(n).transpose() - tip_point_global_coords);
-            radius = d.norm();
+            const double radius = d.norm();
 
-            if (tip_enr.tip_index == 1)
+            double theta = 0.0;
+
+            if (radius > 1e-30)
             {
-                theta = std::atan2(d.dot(crack_tip_1_n), d.dot(crack_tip_1_t));
-            }
-            else if (tip_enr.tip_index == 2)
-            {
-                theta = std::atan2(d.dot(crack_tip_2_n), d.dot(crack_tip_2_t));
+                theta =
+                    std::atan2(
+                        d.dot(n_vec),
+                        d.dot(t_vec)
+                    );
             }
 
-            sqrt_r = std::sqrt(radius);
-            sinhalftheta = std::sin(theta / 2);
-            sintheta = std::sin(theta);
-            coshalftheta = std::cos(theta / 2);
-            f_nodes[n] = {sqrt_r * sinhalftheta, sqrt_r * coshalftheta, sqrt_r * sintheta * sinhalftheta,
-                          sqrt_r * sintheta * coshalftheta};
+            const double sqrt_r =
+                std::sqrt(radius);
+
+            const double sinhalftheta =
+                std::sin(theta / 2.0);
+
+            const double coshalftheta =
+                std::cos(theta / 2.0);
+
+            const double sintheta =
+                std::sin(theta);
+
+            f_nodes[n] = {
+                sqrt_r * sinhalftheta,
+                sqrt_r * coshalftheta,
+                sqrt_r * sintheta * sinhalftheta,
+                sqrt_r * sintheta * coshalftheta
+            };
         }
-        for (int i = 0; i < N_points; i++)
-        {
-            double xi = tip_enr.intersection_point_local_coords.x() + crack_dir_local.x() * i / (N_points);
-            double eta = tip_enr.intersection_point_local_coords.y() + crack_dir_local.y() * i / (N_points);
-            const Eigen::RowVector4d N{(1 - xi) * (1 - eta) / 4, (1 + xi) * (1 - eta) / 4, (1 + xi) * (1 + eta) / 4,
-                                       (1 - xi) * (1 + eta) / 4};
-            const Eigen::RowVector2d p = N * vertices;
-            Eigen::Vector2d d_phys = p.transpose() - tip_point_global_coords;
-            double r = d_phys.norm();
 
-            const double sqrt_r = std::sqrt(r);
-            const double sinhalftheta = 1;
-            const double sintheta = 0;
-            const double coshalftheta = 0;
-            const std::array<double, 4> f = {sqrt_r * sinhalftheta, sqrt_r * coshalftheta,
-                                             sqrt_r * sintheta * sinhalftheta, sqrt_r * sintheta * coshalftheta};
+        auto evalTipRawPoint = [&](
+            double xi,
+            double eta,
+            int side
+        ) -> Eigen::Vector2d {
+            const Eigen::RowVector4d N =
+                quadShape(xi, eta);
 
-            Eigen::RowVector2d p0 = p + N * u;
-            for (int n = 0; n < 4; n++)
+            const Eigen::Vector2d p =
+                (N * vertices).transpose();
+
+            const double r =
+                (p - tip_point_global_coords).norm();
+
+            const double sqrt_r =
+                std::sqrt(r);
+
+            // Твой вариант для crack faces:
+            // upper: +1, 0, 0
+            // lower: -1, 0, 0
+            const double sinhalftheta =
+                side > 0 ? 1.0 : -1.0;
+
+            const double coshalftheta = 0.0;
+            const double sintheta = 0.0;
+
+            const std::array<double, 4> f = {
+                sqrt_r * sinhalftheta,
+                sqrt_r * coshalftheta,
+                sqrt_r * sintheta * sinhalftheta,
+                sqrt_r * sintheta * coshalftheta
+            };
+
+            Eigen::Vector2d p_def =
+                p + (N * u_std).transpose();
+
+            for (int n = 0; n < 4; ++n)
             {
-                for (int a = 0; a < 4; a++)
+                for (int a = 0; a < 4; ++a)
                 {
-                    p0 += N[n] * (f[a] - f_nodes[n][a]) * b_nodes[n].row(a);
+                    const double shift =
+                        f[a] - f_nodes[n][a];
+
+                    p_def +=
+                        N[n] *
+                        shift *
+                        b_nodes[n].row(a).transpose();
                 }
             }
-            upper_points.push_back(glm::vec2{static_cast<float>(p0.x()), static_cast<float>(p0.y())});
-        }
-        for (int i = N_points; i >= 0; i--)
-        {
-            double xi = tip_enr.intersection_point_local_coords.x() + crack_dir_local.x() * i / (N_points);
-            double eta = tip_enr.intersection_point_local_coords.y() + crack_dir_local.y() * i / (N_points);
-            const Eigen::RowVector4d N{(1 - xi) * (1 - eta) / 4, (1 + xi) * (1 - eta) / 4, (1 + xi) * (1 + eta) / 4,
-                                       (1 - xi) * (1 + eta) / 4};
-            const Eigen::RowVector2d p = N * vertices;
-            Eigen::Vector2d d_phys = p.transpose() - tip_point_global_coords;
-            double r = d_phys.norm();
-            Eigen::Vector2d to_intersection = intersection_point_global_coords - tip_point_global_coords;
-            const double sqrt_r = std::sqrt(r);
-            const double sinhalftheta = -1;
-            const double sintheta = 0;
-            const double coshalftheta = 0;
-            const std::array<double, 4> f = {sqrt_r * sinhalftheta, sqrt_r * coshalftheta,
-                                             sqrt_r * sintheta * sinhalftheta, sqrt_r * sintheta * coshalftheta};
 
-            Eigen::RowVector2d p0 = p + N * u;
-            for (int n = 0; n < 4; n++)
+            return p_def;
+        };
+
+        bool found_heaviside_match = false;
+        int best_h_id = -1;
+        int best_h_intersection_id = -1;
+        double best_dist = 1e100;
+
+        const double h_tip =
+            elementSize(vertices);
+
+        for (int h_id = 0; h_id < static_cast<int>(heaviside_enriched.size()); ++h_id)
+        {
+            const HeavisideEnriched& h_enr =
+                heaviside_enriched[h_id];
+
+            const std::array<int, 4>& h_elem =
+                mesh.elements[h_enr.id];
+
+            for (int ip = 0; ip < 2; ++ip)
             {
-                for (int a = 0; a < 4; a++)
+                const double h_xi =
+                    h_enr.intersection_points_local_coords[ip].x();
+
+                const double h_eta =
+                    h_enr.intersection_points_local_coords[ip].y();
+
+                const Eigen::Vector2d h_p =
+                    evalGlobalFromLocal(h_elem, h_xi, h_eta);
+
+                const double dist =
+                    (h_p - intersection_point_global_coords).norm();
+
+                if (dist < best_dist)
                 {
-                    p0 += N[n] * (f[a] - f_nodes[n][a]) * b_nodes[n].row(a);
+                    best_dist = dist;
+                    best_h_id = h_id;
+                    best_h_intersection_id = ip;
                 }
             }
-            lower_points.push_back(glm::vec2{static_cast<float>(p0.x()), static_cast<float>(p0.y())});
         }
+
+        if (best_h_id >= 0 && best_dist < 0.25 * h_tip)
+        {
+            found_heaviside_match = true;
+        }
+
+        Eigen::Vector2d upper_correction =
+            Eigen::Vector2d::Zero();
+
+        Eigen::Vector2d lower_correction =
+            Eigen::Vector2d::Zero();
+
+        if (found_heaviside_match)
+        {
+            const HeavisideEnriched& h_enr =
+                heaviside_enriched[best_h_id];
+
+            const Eigen::Vector2d h_local =
+                h_enr.intersection_points_local_coords
+                    [best_h_intersection_id];
+
+            const Eigen::Vector2d h_upper =
+                evalHeavisideDisplacement(
+                    h_enr,
+                    h_local.x(),
+                    h_local.y(),
+                    +1
+                );
+
+            const Eigen::Vector2d h_lower =
+                evalHeavisideDisplacement(
+                    h_enr,
+                    h_local.x(),
+                    h_local.y(),
+                    -1
+                );
+
+            const Eigen::Vector2d tip_upper_at_intersection =
+                evalTipRawPoint(
+                    xi_inter,
+                    eta_inter,
+                    +1
+                );
+
+            const Eigen::Vector2d tip_lower_at_intersection =
+                evalTipRawPoint(
+                    xi_inter,
+                    eta_inter,
+                    -1
+                );
+
+            upper_correction =
+                h_upper - tip_upper_at_intersection;
+
+            lower_correction =
+                h_lower - tip_lower_at_intersection;
+        }
+        else
+        {
+            std::cout
+                << "WARNING: drawTipElements: no adjacent Heaviside match. "
+                << "tip_index = "
+                << static_cast<int>(tip_enr.tip_index)
+                << ", best_dist = "
+                << best_dist
+                << ", h_tip = "
+                << h_tip
+                << std::endl;
+        }
+
+        std::vector<glm::vec2> upper_points;
+        std::vector<glm::vec2> lower_points;
+
+        upper_points.reserve(N_points + 1);
+        lower_points.reserve(N_points + 1);
+
+        for (int ip = 0; ip <= N_points; ++ip)
+        {
+            const double alpha =
+                static_cast<double>(ip) /
+                static_cast<double>(N_points);
+
+            const double xi =
+                xi_inter +
+                crack_dir_local.x() * alpha;
+
+            const double eta =
+                eta_inter +
+                crack_dir_local.y() * alpha;
+
+            Eigen::Vector2d p =
+                evalTipRawPoint(xi, eta, +1);
+
+            // alpha = 0: intersection, correction full
+            // alpha = 1: tip, correction zero
+            const double blend = 1.0 - alpha;
+
+            p += blend * upper_correction;
+
+            upper_points.push_back(
+                glm::vec2{
+                    static_cast<float>(p.x()),
+                    static_cast<float>(p.y())
+                }
+            );
+        }
+
+        for (int ip = N_points; ip >= 0; --ip)
+        {
+            const double alpha =
+                static_cast<double>(ip) /
+                static_cast<double>(N_points);
+
+            const double xi =
+                xi_inter +
+                crack_dir_local.x() * alpha;
+
+            const double eta =
+                eta_inter +
+                crack_dir_local.y() * alpha;
+
+            Eigen::Vector2d p =
+                evalTipRawPoint(xi, eta, -1);
+
+            const double blend = 1.0 - alpha;
+
+            p += blend * lower_correction;
+
+            lower_points.push_back(
+                glm::vec2{
+                    static_cast<float>(p.x()),
+                    static_cast<float>(p.y())
+                }
+            );
+        }
+
         PolygonalChain poly_chain_upper;
-        poly_chain_upper.color = glm::vec4(1.0, 0.0, 1.0, 1.0);
+        poly_chain_upper.color =
+            glm::vec4{1.0, 0.0, 1.0, 1.0};
         poly_chain_upper.points = upper_points;
+
         polygonal_chains.push_back(poly_chain_upper);
+
         PolygonalChain poly_chain_lower;
-        poly_chain_lower.color = glm::vec4(1.0, 1.0, 0.0, 1.0);
+        poly_chain_lower.color =
+            glm::vec4{1.0, 1.0, 0.0, 1.0};
         poly_chain_lower.points = lower_points;
+
         polygonal_chains.push_back(poly_chain_lower);
     }
 }
-
 template <unsigned int NGauss>
 void computeStress(const std::vector<TipEnriched> &tip_enriched,
                    const std::vector<HeavisideEnriched> &heaviside_enriched, const QuadMesh &mesh,

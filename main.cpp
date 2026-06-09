@@ -1512,9 +1512,22 @@ int main()
     drawHeavisideElements(
         enriched_elements.heaviside_enriched, mesh, enriched_elements_triangulation.heaviside_enriched_triangulation,
         level_set_fields.vertices_level_set_signs, u, node_offset, enriched_elements.heaviside_enriched_nodes, scale);
-    drawTipElements(enriched_elements.tip_enriched, mesh, u, node_offset, enriched_elements.heaviside_enriched_nodes,
-                    enriched_elements.tip_enriched_nodes, scale, polygonal_chains, crack_tip_1_t, crack_tip_1_n,
-                    crack_tip_2_t, crack_tip_2_n);
+    drawTipElements(
+    enriched_elements.tip_enriched,
+    enriched_elements.heaviside_enriched,
+    mesh,
+    u,
+    node_offset,
+    enriched_elements.heaviside_enriched_nodes,
+    enriched_elements.tip_enriched_nodes,
+    level_set_fields.vertices_level_set_signs,
+    scale,
+    polygonal_chains,
+    crack_tip_1_t,
+    crack_tip_1_n,
+    crack_tip_2_t,
+    crack_tip_2_n
+);
     computeStress<13>(enriched_elements.tip_enriched, enriched_elements.heaviside_enriched, mesh,
                       enriched_elements_triangulation.tip_enriched_triangulation,
                       enriched_elements_triangulation.heaviside_enriched_triangulation, u, node_offset,
