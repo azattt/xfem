@@ -261,6 +261,31 @@ void scroll_callback([[maybe_unused]] GLFWwindow *window, [[maybe_unused]] doubl
     camera.ProcessMouseScroll(static_cast<float>(yoffset));
 }
 
+void saveCrackToFile(const Crack &crack, const std::string &filename)
+{
+    std::ofstream out(filename);
+
+    if (!out.is_open())
+    {
+        throw std::runtime_error("Cannot open file for writing: " + filename);
+    }
+
+    if (crack.indices.empty())
+    {
+        throw std::runtime_error("Cannot save crack: no crack segments");
+    }
+
+    // Сохраняем НЕ crack.vertices по порядку хранения,
+    // а реальную полилинию по crack.indices.
+    out << crack.vertices[crack.indices.front().v0].x() << " " << crack.vertices[crack.indices.front().v0].y() << "\n";
+
+    for (const CrackSegment &seg : crack.indices)
+    {
+        out << crack.vertices[seg.v1].x() << " " << crack.vertices[seg.v1].y() << "\n";
+    }
+
+    std::cout << "Crack saved to: " << filename << std::endl;
+}
 int main()
 {
     std::cout << "CPU has AVX2: " << hasAVX2() << std::endl;
@@ -333,7 +358,8 @@ int main()
     {
         for (int i = 0; i < wn - 1; i++)
         {
-            // if ((i >= wn/2 -1 && i <= wn/2) && j == hn/2) continue;
+            if ((i >= wn / 6 - 1 && i <= 2 * wn / 6) && j == 3 * hn / 5)
+                continue;
             mesh.elements.push_back(
                 std::array<int, 4>{j * wn + i, j * wn + i + 1, (j + 1) * wn + i + 1, (j + 1) * wn + i});
         }
@@ -396,12 +422,14 @@ int main()
                                           crack.vertices[crack.indices[crack.indices.size() - 1].v0]);
     Eigen::Vector2d crack_tip_2_t = last_crack_segment.normalized();
     Eigen::Vector2d crack_tip_2_n = Eigen::Vector2d{-crack_tip_2_t.y(), crack_tip_2_t.x()};
+    const double E = 2 * std::pow(10, 11);
+    constexpr double nu = 0.3;
+    const Eigen::Matrix3d D = setup_D_matrix(E, nu, true);
 
     LevelSetFields level_set_fields = compute_level_set_fields(mesh, crack);
     EnrichedElements enriched_elements =
         find_enriched_elements_by_level_set_fields_simple(mesh, crack, level_set_fields);
-    // EnrichedElements enriched_elements;
-    // EnrichedElementsTriangulation enriched_elements_triangulation;
+
     EnrichedElementsTriangulation enriched_elements_triangulation =
         triangulate_enriched(mesh, enriched_elements, level_set_fields);
 
@@ -412,11 +440,6 @@ int main()
     {
         node_offset[n] = dof_counter;
         node_ndof[n] = 12; // always two standard DOFs
-        // if (enriched_elements.heaviside_enriched_nodes[n])
-        // {
-        //     node_ndof[n] += 2;
-        // }
-        // if (enriched_elements.tip_enriched_nodes[n])      node_ndof[n] += 8;
         dof_counter += node_ndof[n];
     }
     std::vector<bool> active(dof_counter);
@@ -438,10 +461,6 @@ int main()
               << " Tip enriched: " << enriched_elements.tip_enriched.size() << std::endl;
     std::cout << "Assembling matrix of size: " << dof_counter << std::endl;
     std::cout << "Triplets count: " << total_triplets << std::endl;
-
-    const double E = 2 * std::pow(10, 11);
-    constexpr double nu = 0.3;
-    const Eigen::Matrix3d D = setup_D_matrix(E, nu, true);
 
     // 8-point Gauss-Legendre on [0, 1]
     // Можно заменить на 4 точки, но для tip singularity 8x8 устойчивее.
@@ -530,9 +549,6 @@ int main()
         double shift;
         double factor;
         Eigen::Matrix<double, 3, 40> B;
-
-        double area_duffy = 0.0;
-        double area_tri = 0.0;
 
         for (unsigned int j = 0; j < 5; j++)
         {
@@ -800,285 +816,37 @@ int main()
             }
         }
 
-        //         Eigen::Matrix<double, 40, 40> KeTri;
-        //         KeTri.setZero();
-        //         for (unsigned int j = 0; j < 5; j++)
-        //         {
-
-        //             const std::array<unsigned char, 3> &triangle = triangulation.tri_indices[j];
-
-        //             Eigen::Matrix2d J_xieta_rs{{{local_points[triangle[1]].x() - local_points[triangle[0]].x(),
-        //                                          local_points[triangle[2]].x() - local_points[triangle[0]].x()},
-        //                                         {local_points[triangle[1]].y() - local_points[triangle[0]].y(),
-        //                                          local_points[triangle[2]].y() - local_points[triangle[0]].y()}}};
-        //             double det_tri = J_xieta_rs.determinant();
-        //             //     std::cout << "Triangle " << i << " vertices (local): "
-        //             //   << local_points[triangle[0]].x << "," << local_points[triangle[0]].y << " ; "
-        //             //   << local_points[triangle[1]].x << "," << local_points[triangle[1]].y << " ; "
-        //             //   << local_points[triangle[2]].x << "," << local_points[triangle[2]].y << "\n";
-        //             for (unsigned int gp = 0; gp < LinearTriangle::Triangle13PointRule::NGauss; gp++)
-        //             {
-        //                 B.setZero();
-        //                 double r = LinearTriangle::Triangle13PointRule::gauss_pts[gp][0];
-        //                 double s = LinearTriangle::Triangle13PointRule::gauss_pts[gp][1];
-        //                 double t = 1 - r - s;
-        //                 double xi = local_points[triangle[0]].x() * t + local_points[triangle[1]].x() * r +
-        //                            local_points[triangle[2]].x() * s;
-        //                 double eta = local_points[triangle[0]].y() * t + local_points[triangle[1]].y() * r +
-        //                             local_points[triangle[2]].y() * s;
-        //                 LinearQuad::ShapeData shape;
-        //                 // Node 1
-        //                 shape.N[0] = 0.25 * (1 - xi) * (1 - eta);
-        //                 shape.dN_xi_eta(0, 0) = -0.25 * (1 - eta);
-        //                 shape.dN_xi_eta(1, 0) = -0.25 * (1 - xi);
-        //                 // Node 2
-        //                 shape.N[1] = 0.25 * (1 + xi) * (1 - eta);
-        //                 shape.dN_xi_eta(0, 1) = 0.25 * (1 - eta);
-        //                 shape.dN_xi_eta(1, 1) = -0.25 * (1 + xi);
-        //                 // Node 3
-        //                 shape.N[2] = 0.25 * (1 + xi) * (1 + eta);
-        //                 shape.dN_xi_eta(0, 2) = 0.25 * (1 + eta);
-        //                 shape.dN_xi_eta(1, 2) = 0.25 * (1 + xi);
-        //                 // Node 4
-        //                 shape.N[3] = 0.25 * (1 - xi) * (1 + eta);
-        //                 shape.dN_xi_eta(0, 3) = -0.25 * (1 + eta);
-        //                 shape.dN_xi_eta(1, 3) = 0.25 * (1 - xi);
-
-        //                 LinearTriangle::JacobianData jd;
-        //                 jd.J = shape.dN_xi_eta * coords;
-        //                 bool invertible;
-        //                 jd.J.computeInverseAndDetWithCheck(jd.invJ, jd.detJ, invertible, 1e-12);
-        //                 if (!invertible)
-        //                     throw std::runtime_error("Jacobi matrix is not invertible");
-
-        //                 Eigen::Matrix<double, 2, 4> dN_dx_dy;
-        //                 dN_dx_dy = jd.invJ * shape.dN_xi_eta;
-
-        //                 Eigen::Vector2d gauss_point_global_coords = Eigen::Vector2d::Zero();
-        //                 Eigen::Vector2d tip_point_global_coords = Eigen::Vector2d::Zero();
-        //                 double xi_tip  = enriched_element.tip_point_local_coords.x();
-        //                 double eta_tip = enriched_element.tip_point_local_coords.y();
-        //                 std::array<double,4> N_tip;
-
-        //                 N_tip[0] = 0.25 * (1 - xi_tip) * (1 - eta_tip);
-        //                 N_tip[1] = 0.25 * (1 + xi_tip) * (1 - eta_tip);
-        //                 N_tip[2] = 0.25 * (1 + xi_tip) * (1 + eta_tip);
-        //                 N_tip[3] = 0.25 * (1 - xi_tip) * (1 + eta_tip);
-        //                 for (int k = 0; k < 4; k++)
-        //                 {
-        //                     gauss_point_global_coords += shape.N[k] * coords.row(k);
-        //                     tip_point_global_coords += N_tip[k] * coords.row(k);
-        //                 }
-        //                 d = gauss_point_global_coords - tip_point_global_coords;
-        //                 radius2 = d.squaredNorm();
-        //                 radius = std::sqrt(radius2);
-        //                 if (enriched_element.tip_index == 1){
-        //                     theta = std::atan2(d.dot(crack_tip_1_n), d.dot(crack_tip_1_t)) ;
-        //                 }
-        //                 else if (enriched_element.tip_index == 2){
-        //                     theta = std::atan2(d.dot(crack_tip_2_n), d.dot(crack_tip_2_t)) ;
-        //                 }
-
-        //                 sqrt_r = std::sqrt(radius);
-        //                 sinhalftheta = std::sin(theta / 2);
-        //                 sintheta = std::sin(theta);
-        //                 coshalftheta = std::cos(theta / 2);
-        //                 costheta = std::cos(theta);
-        //                 std::array<double, 4> f = {sqrt_r * sinhalftheta, sqrt_r * coshalftheta,
-        //                                            sqrt_r * sintheta * sinhalftheta, sqrt_r * sintheta *
-        //                                            coshalftheta};
-
-        //                 dfdr[0] = 0.5 / sqrt_r * sinhalftheta;               // ∂f1/∂r
-        //                 dfdr[1] = 0.5 / sqrt_r * coshalftheta;
-        //                 dfdr[2] = 0.5 / sqrt_r * sinhalftheta * sintheta;
-        //                 dfdr[3] = 0.5 / sqrt_r * coshalftheta * sintheta;
-
-        //                 dfdtheta[0] = sqrt_r * 0.5 * coshalftheta;           // ∂f1/∂θ
-        //                 dfdtheta[1] = -sqrt_r * 0.5 * sinhalftheta;
-        //                 dfdtheta[2] = sqrt_r * (0.5 * coshalftheta * sintheta + sinhalftheta * costheta);
-        //                 dfdtheta[3] = sqrt_r * (-0.5 * sinhalftheta * sintheta + coshalftheta * costheta);
-
-        //                 drdx = (radius > 1e-12) ? d.x() / radius : 0.0;
-        //                 drdy = (radius > 1e-12) ? d.y() / radius : 0.0;
-        //                 if (enriched_element.tip_index == 1){
-        //                     double a = d.dot(crack_tip_1_t);   // distance along tangent
-        //                     double b = d.dot(crack_tip_1_n);   // distance along normal
-        //                     double r2 = a*a + b*b;
-        //                     if (r2 > 1e-12) {
-        //                         dthetadx = (a * crack_tip_1_n.x() - b * crack_tip_1_t.x()) / r2;
-        //                         dthetady = (a * crack_tip_1_n.y() - b * crack_tip_1_t.y()) / r2;
-        //                     } else {
-        //                         dthetadx = dthetady = 0.0;
-        //                     }
-        //                 }
-        //                 else if (enriched_element.tip_index == 2){
-        //                     double a = d.dot(crack_tip_2_t);   // distance along tangent
-        //                     double b = d.dot(crack_tip_2_n);   // distance along normal
-        //                     double r2 = a*a + b*b;
-        //                     if (r2 > 1e-12) {
-        //                         dthetadx = (a * crack_tip_2_n.x() - b * crack_tip_2_t.x()) / r2;
-        //                         dthetady = (a * crack_tip_2_n.y() - b * crack_tip_2_t.y()) / r2;
-        //                     } else {
-        //                         dthetadx = dthetady = 0.0;
-        //                     }
-        //                 }
-
-        //                 for (int a = 0; a < 4; ++a) {
-        //                     df_dx[a].x() = dfdr[a] * drdx + dfdtheta[a] * dthetadx;
-        //                     df_dx[a].y() = dfdr[a] * drdy + dfdtheta[a] * dthetady;
-        //                 }
-
-        //                 for (int n = 0; n < 4; ++n)
-        //                 {
-        //                     dNdx = dN_dx_dy(0,n);
-        //                     dNdy = dN_dx_dy(1,n);
-        //                     Nn = shape.N[n];
-        //                     // no enrnchment[edge]
-        //                     B(0, 10 * n) = dNdx; // du/dx
-        //                     B(0, 10 * n + 1) = 0;
-        //                     B(1, 10 * n) = 0;
-        //                     B(1, 10 * n + 1) = dNdy; // dv/dy
-        //                     B(2, 10 * n) = dNdy;     // dv/dx
-        //                     B(2, 10 * n + 1) = dNdx; // du/dy
-
-        //                     // f_alpha
-        //                     for (int a = 0; a < 4; a++)
-        //                     {
-        //                         shift = f[a] - f_nodes[n][a];
-        //                         B(0, 10 * n + 2 + 2 * a) = dNdx * shift + Nn * df_dx[a].x(); // du/dx
-        //                         B(0, 10 * n + 3 + 2 * a) = 0;
-        //                         B(1, 10 * n + 2 + 2 * a) = 0;
-        //                         B(1, 10 * n + 3 + 2 * a) = dNdy * shift + Nn * df_dx[a].y(); // dv/dy
-        //                         B(2, 10 * n + 2 + 2 * a) = dNdy * shift + Nn * df_dx[a].y(); // dv/dx
-        //                         B(2, 10 * n + 3 + 2 * a) = dNdx * shift + Nn * df_dx[a].x(); // du/dy
-        //                     }
-        //                 }
-        //                 factor =
-        //                     LinearTriangle::Triangle13PointRule::gauss_wts[gp] * std::abs(det_tri) *
-        //                     std::abs(jd.detJ);
-        //                 if (det_tri < 0)
-        //                     std::cout << "det_tri < 0" << std::endl;
-        //                 if (jd.detJ < 0)
-        //                     std::cout << "jd.detJ < 0" << std::endl;
-        //                 KeTri += factor * (B.transpose() * D * B) * thickness;
-        //                 area_tri += factor;
-        //             }
-        //         }
-        //         std::cout << "Ke.norm() = " << Ke.norm() << "\n";
-        // std::cout << "KeTri.norm() = " << KeTri.norm() << "\n";
-        // std::cout << "(Ke-KeTri).norm() = " << (Ke - KeTri).norm() << "\n";
-        // std::cout << "relative diff = "
-        //           << (Ke - KeTri).norm() / std::max(1e-30, KeTri.norm())
-        //           << std::endl;
-        //           std::cout << "area_duffy = " << area_duffy << "\n";
-        // std::cout << "area_tri   = " << area_tri << "\n";
-        // std::cout << "area relative diff = "
-        //           << std::abs(area_duffy - area_tri) / std::max(1e-30, area_tri)
-        //           << std::endl;
-        // Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 16, 16>> es(Ke);
-        // std::cout << "eigenvalues: " << es.eigenvalues() << std::endl;
-        // std::cout << "total_area: " << total_area << std::endl;
-        // std::cout << "det: " << Ke.determinant() << std::endl;
-
-        if (enriched_elements.heaviside_enriched_nodes[element[0]] ||
-            enriched_elements.heaviside_enriched_nodes[element[1]] ||
-            enriched_elements.heaviside_enriched_nodes[element[2]] ||
-            enriched_elements.heaviside_enriched_nodes[element[3]])
+        Eigen::Matrix<double, 48, 48> Ke_expanded;
+        Ke_expanded.setZero();
+        for (int i = 0; i < 4; ++i)
         {
-            Eigen::Matrix<double, 48, 48> Ke_expanded;
-            Ke_expanded.setZero();
-            for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
             {
-                for (int j = 0; j < 4; ++j)
+                for (int k = 0; k < 10; k++)
                 {
-                    for (int k = 0; k < 10; k++)
+                    for (int l = 0; l < 10; l++)
                     {
-                        for (int l = 0; l < 10; l++)
-                        {
-                            const int nodes_per_elem = 4;
-                            const int dofs_per_node_local = 10;  // standard+tip
-                            const int dofs_per_node_global = 12; // standard+heaviside+tip
-                            const int offset_tip = 2;            // skip Heaviside DOFs
-                            // Map local DOF index to global block index
-                            int global_row_dof;
-                            int global_col_dof;
+                        const int offset_tip = 2;            // skip Heaviside DOFs
+                        // Map local DOF index to global block index
+                        int global_row_dof;
+                        int global_col_dof;
 
-                            if (k < 2)                           // standard DOFs
-                                global_row_dof = k;              // 0,1
-                            else                                 // tip DOFs
-                                global_row_dof = k + offset_tip; // 2->4, 3->5, ..., 9->11
+                        if (k < 2)                           // standard DOFs
+                            global_row_dof = k;              // 0,1
+                        else                                 // tip DOFs
+                            global_row_dof = k + offset_tip; // 2->4, 3->5, ..., 9->11
 
-                            if (l < 2)
-                                global_col_dof = l;
-                            else
-                                global_col_dof = l + offset_tip;
-                            Ke_expanded(12 * i + global_row_dof, 12 * j + global_col_dof) = Ke(10 * i + k, 10 * j + l);
-
-                            // Ke_expanded(12 * i + 0, 12 * j + 0) = Ke(10 * i + 0, 10 * j + 0);
-                            // Ke_expanded(12 * i + 0, 12 * j + 1) = Ke(10 * i + 0, 10 * j + 1);
-                            // Ke_expanded(12 * i + 1, 12 * j + 0) = Ke(10 * i + 1, 10 * j + 0);
-                            // Ke_expanded(12 * i + 1, 12 * j + 1) = Ke(10 * i + 1, 10 * j + 1);
-                        }
+                        if (l < 2)
+                            global_col_dof = l;
+                        else
+                            global_col_dof = l + offset_tip;
+                        Ke_expanded(12 * i + global_row_dof, 12 * j + global_col_dof) = Ke(10 * i + k, 10 * j + l);
                     }
                 }
             }
-            // std::cout << "output 1: " << Ke_expanded;
-            FEMAssemble::addElementSparseUpperStiffness(
-                LinearQuad::Element{element[0], element[1], element[2], element[3]}, Ke_expanded, triplets, node_offset,
-                node_ndof, 12, active);
-            // std::cout << "expanded\n" << Ke_expanded << std::endl;
-            // std::cout << "not expanded\n" << Ke << std::endl;
-            // std::ofstream tmp_file("tip_enriched.txt");
-            // tmp_file << Ke_expanded;
-            // tmp_file.close();
-            // std::ofstream tmp_file2("tip_enriched2.txt");
-            // tmp_file2 << Ke;
-            // tmp_file2.close();
         }
-        else
-        {
-            Eigen::Matrix<double, 48, 48> Ke_expanded;
-            Ke_expanded.setZero();
-            for (int i = 0; i < 4; ++i)
-            {
-                for (int j = 0; j < 4; ++j)
-                {
-                    for (int k = 0; k < 10; k++)
-                    {
-                        for (int l = 0; l < 10; l++)
-                        {
-                            const int nodes_per_elem = 4;
-                            const int dofs_per_node_local = 10;  // standard+tip
-                            const int dofs_per_node_global = 12; // standard+heaviside+tip
-                            const int offset_tip = 2;            // skip Heaviside DOFs
-                            // Map local DOF index to global block index
-                            int global_row_dof;
-                            int global_col_dof;
-
-                            if (k < 2)                           // standard DOFs
-                                global_row_dof = k;              // 0,1
-                            else                                 // tip DOFs
-                                global_row_dof = k + offset_tip; // 2->4, 3->5, ..., 9->11
-
-                            if (l < 2)
-                                global_col_dof = l;
-                            else
-                                global_col_dof = l + offset_tip;
-                            Ke_expanded(12 * i + global_row_dof, 12 * j + global_col_dof) = Ke(10 * i + k, 10 * j + l);
-
-                            // Ke_expanded(12 * i + 0, 12 * j + 0) = Ke(10 * i + 0, 10 * j + 0);
-                            // Ke_expanded(12 * i + 0, 12 * j + 1) = Ke(10 * i + 0, 10 * j + 1);
-                            // Ke_expanded(12 * i + 1, 12 * j + 0) = Ke(10 * i + 1, 10 * j + 0);
-                            // Ke_expanded(12 * i + 1, 12 * j + 1) = Ke(10 * i + 1, 10 * j + 1);
-                        }
-                    }
-                }
-            }
-            FEMAssemble::addElementSparseUpperStiffness(
-                LinearQuad::Element{element[0], element[1], element[2], element[3]}, Ke_expanded, triplets, node_offset,
-                node_ndof, 12, active);
-            Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 48, 48>> es(Ke_expanded);
-        }
+        FEMAssemble::addElementSparseUpperStiffness(LinearQuad::Element{element[0], element[1], element[2], element[3]},
+                                                    Ke_expanded, triplets, node_offset, node_ndof, 12, active);
     }
 
     // heaviside elements
@@ -1128,10 +896,6 @@ int main()
                                         {local_points[triangle[1]].y() - local_points[triangle[0]].y(),
                                          local_points[triangle[2]].y() - local_points[triangle[0]].y()}}};
             double det_tri = J_xieta_rs.determinant();
-            //     std::cout << "Triangle " << i << " vertices (local): "
-            //   << local_points[triangle[0]].x << "," << local_points[triangle[0]].y << " ; "
-            //   << local_points[triangle[1]].x << "," << local_points[triangle[1]].y << " ; "
-            //   << local_points[triangle[2]].x << "," << local_points[triangle[2]].y << "\n";
             for (unsigned int gp = 0; gp < LinearTriangle::Triangle3PointRule::NGauss; gp++)
             {
                 double r = LinearTriangle::Triangle3PointRule::gauss_pts[gp][0];
@@ -1159,9 +923,6 @@ int main()
                 shape.dN_xi_eta(0, 3) = -0.25 * (1 + eta);
                 shape.dN_xi_eta(1, 3) = 0.25 * (1 - xi);
                 LinearTriangle::JacobianData jd;
-                // Initialize to zero
-                // std::cout << coords << std::endl;
-                // std::cout << shape.dN_xi_eta << std::endl;
                 jd.J = shape.dN_xi_eta * coords;
                 bool invertible;
                 jd.J.computeInverseAndDetWithCheck(jd.invJ, jd.detJ, invertible, 1e-12);
@@ -1195,14 +956,6 @@ int main()
                     std::cout << "jd.detJ < 0" << std::endl;
                 Ke += factor * (B.transpose() * D * B) * thickness;
                 total_area += det_tri;
-                // Eigen::VectorXd rigid_x(16);
-                // rigid_x.setZero();
-                // for (int i = 0; i < 4; ++i) rigid_x(4*i) = 1.0;   // standard u_x = 1
-                // Eigen::VectorXd strain = B * rigid_x;   // but B is not available after assembly; we need to compute
-                // it again or store
-                // // Instead, compute the residual Ke * rigid_x
-                // Eigen::VectorXd res = Ke * rigid_x;
-                // std::cout << "Norm of Ke * rigid_x: " << res.norm() << std::endl;  // should be near 0
             }
         }
         if (!disable_debug_output)
@@ -1213,46 +966,24 @@ int main()
             std::cout << "det: " << Ke.determinant() << std::endl;
             std::cout << element[0] << " " << element[1] << " " << element[2] << " " << element[3] << std::endl;
         }
-        if (true || enriched_elements.tip_enriched_nodes[element[0]] ||
-            enriched_elements.tip_enriched_nodes[element[1]] || enriched_elements.tip_enriched_nodes[element[2]] ||
-            enriched_elements.tip_enriched_nodes[element[3]])
+
+        Eigen::Matrix<double, 48, 48> Ke_expanded;
+        Ke_expanded.setZero();
+        for (int i = 0; i < 4; ++i)
         {
-            Eigen::Matrix<double, 48, 48> Ke_expanded;
-            Ke_expanded.setZero();
-            for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
             {
-                for (int j = 0; j < 4; ++j)
+                for (int k = 0; k < 4; k++)
                 {
-                    for (int k = 0; k < 4; k++)
+                    for (int l = 0; l < 4; l++)
                     {
-                        for (int l = 0; l < 4; l++)
-                        {
-                            Ke_expanded(12 * i + k, 12 * j + l) = Ke(4 * i + k, 4 * j + l);
-                            // Ke_expanded(12 * i + 0, 12 * j + 0) = Ke(10 * i + 0, 10 * j + 0);
-                            // Ke_expanded(12 * i + 0, 12 * j + 1) = Ke(10 * i + 0, 10 * j + 1);
-                            // Ke_expanded(12 * i + 1, 12 * j + 0) = Ke(10 * i + 1, 10 * j + 0);
-                            // Ke_expanded(12 * i + 1, 12 * j + 1) = Ke(10 * i + 1, 10 * j + 1);
-                        }
+                        Ke_expanded(12 * i + k, 12 * j + l) = Ke(4 * i + k, 4 * j + l);
                     }
                 }
-                // std::ofstream tmp_file("test_heaviside.txt");
-                // tmp_file << Ke_expanded;
-                // tmp_file.close();
-                // std::ofstream tmp_file2("test_heaviside2.txt");
-                // tmp_file2 << Ke;
-                // tmp_file2.close();
             }
-            FEMAssemble::addElementSparseUpperStiffness(
-                LinearQuad::Element{element[0], element[1], element[2], element[3]}, Ke_expanded, triplets, node_offset,
-                node_ndof, 12, active);
         }
-        else
-        {
-
-            FEMAssemble::addElementSparseUpperStiffness(
-                LinearQuad::Element{element[0], element[1], element[2], element[3]}, Ke, triplets, node_offset,
-                node_ndof, 4, active);
-        }
+        FEMAssemble::addElementSparseUpperStiffness(LinearQuad::Element{element[0], element[1], element[2], element[3]},
+                                                    Ke_expanded, triplets, node_offset, node_ndof, 12, active);
     }
 
     Eigen::Matrix<double, 8, 8> Ke;
@@ -1278,63 +1009,29 @@ int main()
             coordMat(i, 1) = mesh.vertices[element[i]].y();
         }
         Ke = LinearQuad::element_stiffness(coordMat, D, thickness);
-        // whether no enrichment or blend
-        if (false && (enriched_elements.heaviside_enriched_nodes[element[0]] ||
-                      enriched_elements.heaviside_enriched_nodes[element[1]] ||
-                      enriched_elements.heaviside_enriched_nodes[element[2]] ||
-                      enriched_elements.heaviside_enriched_nodes[element[3]]))
+
+        Eigen::Matrix<double, 48, 48> Ke_expanded;
+        Ke_expanded.setZero();
+        for (int i = 0; i < 4; ++i)
         {
-            Ke_expanded.setZero();
-            for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
             {
-                for (int j = 0; j < 4; ++j)
+                for (int k = 0; k < 2; k++)
                 {
-                    Ke_expanded(4 * i + 0, 4 * j + 0) = Ke(2 * i + 0, 2 * j + 0);
-                    Ke_expanded(4 * i + 0, 4 * j + 1) = Ke(2 * i + 0, 2 * j + 1);
-                    Ke_expanded(4 * i + 1, 4 * j + 0) = Ke(2 * i + 1, 2 * j + 0);
-                    Ke_expanded(4 * i + 1, 4 * j + 1) = Ke(2 * i + 1, 2 * j + 1);
-                }
-            }
-            FEMAssemble::addElementSparseUpperStiffness(element, Ke_expanded, triplets, node_offset, node_ndof, 4,
-                                                        active);
-        }
-        else if (true || enriched_elements.tip_enriched_nodes[element[0]] ||
-                 enriched_elements.tip_enriched_nodes[element[1]] || enriched_elements.tip_enriched_nodes[element[2]] ||
-                 enriched_elements.tip_enriched_nodes[element[3]])
-        {
-            Eigen::Matrix<double, 48, 48> Ke_expanded;
-            Ke_expanded.setZero();
-            for (int i = 0; i < 4; ++i)
-            {
-                for (int j = 0; j < 4; ++j)
-                {
-                    for (int k = 0; k < 2; k++)
+                    for (int l = 0; l < 2; l++)
                     {
-                        for (int l = 0; l < 2; l++)
-                        {
-                            Ke_expanded(12 * i + k, 12 * j + l) = Ke(2 * i + k, 2 * j + l);
-                            // Ke_expanded(12 * i + 0, 12 * j + 0) = Ke(10 * i + 0, 10 * j + 0);
-                            // Ke_expanded(12 * i + 0, 12 * j + 1) = Ke(10 * i + 0, 10 * j + 1);
-                            // Ke_expanded(12 * i + 1, 12 * j + 0) = Ke(10 * i + 1, 10 * j + 0);
-                            // Ke_expanded(12 * i + 1, 12 * j + 1) = Ke(10 * i + 1, 10 * j + 1);
-                        }
+                        Ke_expanded(12 * i + k, 12 * j + l) = Ke(2 * i + k, 2 * j + l);
                     }
                 }
             }
-            FEMAssemble::addElementSparseUpperStiffness(
-                LinearQuad::Element{element[0], element[1], element[2], element[3]}, Ke_expanded, triplets, node_offset,
-                node_ndof, 12, active);
         }
-        else
-        {
-            if (!disable_debug_output)
-                std::cout << element[0] << " " << element[1] << " " << element[2] << " " << element[3] << std::endl;
-            FEMAssemble::addElementSparseUpperStiffness(element, Ke, triplets, node_offset, node_ndof, 2, active);
-        }
+        FEMAssemble::addElementSparseUpperStiffness(LinearQuad::Element{element[0], element[1], element[2], element[3]},
+                                                    Ke_expanded, triplets, node_offset, node_ndof, 12, active);
+
         elementsCreated++;
     }
-    if (!disable_debug_output)
-        std::cout << std::endl;
+
+    std::cout << std::endl;
     auto K = FEMAssemble::createStiffnessFromTriplets(triplets, dof_counter);
 
     std::cout << "Global stiffness matrix is assembled" << std::endl;
@@ -1353,38 +1050,9 @@ int main()
     std::cout << "Applying boundary conditions" << std::endl;
     std::vector<int> fixedDofs;
     std::vector<double> fixedValues;
-
-    // for (unsigned int i = 0; i < wn; i++)
-    // {
-    //     int off = node_offset[i];
-    //     fixedDofs.push_back(off);
-    //     fixedDofs.push_back(off + 1);
-    //     fixedValues.push_back(0);
-    //     fixedValues.push_back(0);
-    //     off = node_offset[(wn * (hn - 1) + i)];
-    //     // fixedDofs.push_back(off);
-    //     // fixedDofs.push_back(off + 1);
-    //     // fixedValues.push_back(0.1);
-    //     // fixedValues.push_back(0.2);
-    //     // FEMAssemble::fixDOF(K, P, i, UX|UY);
-    // }
-    // for (int i = 0; i < wn; i++)
-    // {
-    //     int off = node_offset[(wn * (hn - 1) + i)];
-    //     P(off + 1) = 10000000;
-    // }
-    // P(10) = 1;
-    // Eigen::JacobiSVD<Eigen::MatrixXd> svd{Eigen::MatrixXd(K)};;
-    // double cond = svd.singularValues()(0)
-    // / svd.singularValues()(svd.singularValues().size()-1);
-    // std::cout << "Condition number of KBC: " << cond << std::endl;
-    // for (unsigned int i = hn * 0.2; i < hn * 0.8; i++){
-    //     P((wn*(i)+0)*2) = -10000;
-    //     P((wn*(i)+wn-1)*2) = 10000;
-    // }
     applyBC(w, h, wn, hn, thickness, P, node_offset, fixedDofs, fixedValues);
-
     FEMAssemble::applyDirichletSymmetric(K, P, fixedDofs, fixedValues);
+
     if (!disable_output)
     {
         std::cout << "Writing to file" << std::endl;
@@ -1450,6 +1118,14 @@ int main()
     camera.Zoom = 90.0f;
     camera.MovementSpeed = 0.5f;
     std::cout << "fdsfdsf" << std::endl;
+
+    drawVonMisesStressField(enriched_elements.tip_enriched, enriched_elements.heaviside_enriched, mesh,
+                            enriched_elements_triangulation.tip_enriched_triangulation,
+                            enriched_elements_triangulation.heaviside_enriched_triangulation, u, node_offset,
+                            enriched_elements.heaviside_enriched_nodes, enriched_elements.tip_enriched_nodes,
+                            level_set_fields.vertices_level_set_signs, crack_tip_1_t, crack_tip_1_n, crack_tip_2_t,
+                            crack_tip_2_n, D, scale);
+
     GLFWwindow *window;
 
     /* Initialize the library */
@@ -1490,15 +1166,6 @@ int main()
     std::vector<Quad> quads;
     std::vector<PolygonalChain> polygonal_chains;
 
-    // for (const int element_id : enriched_elements.regular)
-    // {
-    //         const LinearQuad::Element &element = mesh.elements[element_id];
-    //         quads.push_back(Quad{toGlm(vertices_displaced[element[0]].cast<float>().eval()),
-    //                             toGlm(vertices_displaced[element[1]].cast<float>().eval()),
-    //                             toGlm(vertices_displaced[element[2]].cast<float>().eval()),
-    //                             toGlm(vertices_displaced[element[3]].cast<float>().eval()),
-    //                             packColor(glm::vec4(1.0f, 0.0f, 0.0f, 1.0f))});
-    // }
 
     for (const auto &element : mesh.elements)
     {
@@ -1512,29 +1179,49 @@ int main()
     drawHeavisideElements(
         enriched_elements.heaviside_enriched, mesh, enriched_elements_triangulation.heaviside_enriched_triangulation,
         level_set_fields.vertices_level_set_signs, u, node_offset, enriched_elements.heaviside_enriched_nodes, scale);
-    drawTipElements(
-    enriched_elements.tip_enriched,
-    enriched_elements.heaviside_enriched,
-    mesh,
-    u,
-    node_offset,
-    enriched_elements.heaviside_enriched_nodes,
-    enriched_elements.tip_enriched_nodes,
-    level_set_fields.vertices_level_set_signs,
-    scale,
-    polygonal_chains,
-    crack_tip_1_t,
-    crack_tip_1_n,
-    crack_tip_2_t,
-    crack_tip_2_n
-);
-    computeStress<13>(enriched_elements.tip_enriched, enriched_elements.heaviside_enriched, mesh,
-                      enriched_elements_triangulation.tip_enriched_triangulation,
-                      enriched_elements_triangulation.heaviside_enriched_triangulation, u, node_offset,
-                      enriched_elements.heaviside_enriched_nodes, enriched_elements.tip_enriched_nodes,
-                      level_set_fields.vertices_level_set_signs, LinearTriangle::Triangle13PointRule::gauss_pts,
-                      LinearTriangle::Triangle13PointRule::gauss_wts, crack_tip_1_t, crack_tip_1_n, crack_tip_2_t,
-                      crack_tip_2_n, D, 2 * std::pow(10, 11), 0.3, Rin, Rout);
+    drawTipElements(enriched_elements.tip_enriched, enriched_elements.heaviside_enriched, mesh, u, node_offset,
+                    enriched_elements.heaviside_enriched_nodes, enriched_elements.tip_enriched_nodes,
+                    level_set_fields.vertices_level_set_signs, scale, polygonal_chains, crack_tip_1_t, crack_tip_1_n,
+                    crack_tip_2_t, crack_tip_2_n);
+    std::vector<TipKResult> k_results =
+        computeStress<13>(enriched_elements.tip_enriched, enriched_elements.heaviside_enriched, mesh,
+                          enriched_elements_triangulation.tip_enriched_triangulation,
+                          enriched_elements_triangulation.heaviside_enriched_triangulation, u, node_offset,
+                          enriched_elements.heaviside_enriched_nodes, enriched_elements.tip_enriched_nodes,
+                          level_set_fields.vertices_level_set_signs, LinearTriangle::Triangle13PointRule::gauss_pts,
+                          LinearTriangle::Triangle13PointRule::gauss_wts, crack_tip_1_t, crack_tip_1_n, crack_tip_2_t,
+                          crack_tip_2_n, D, E, nu, Rin, Rout);
+    if (!k_results.empty())
+    {
+        double max_Keq = 0.0;
+
+        for (const TipKResult &r : k_results)
+        {
+            const double Keq = computeEquivalentK(r.K_I, r.K_II);
+            max_Keq = std::max(max_Keq, Keq);
+        }
+
+        // Для первого теста делаем KIC ниже текущего Keq,
+        // чтобы трещина точно выросла.
+        const double KIC_demo = 0.7 * max_Keq;
+
+        // Длина прироста: половина размера элемента.
+        const double da = 5 * std::min(wh, hh);
+
+        const bool grown = growCrackOneStep(crack, k_results, KIC_demo, da, w, h);
+
+        if (grown)
+        {
+            saveCrackToFile(crack, "mesh/crack_grown.txt");
+
+            std::cout << "Crack growth step completed.\n";
+            std::cout << "To continue growth, copy mesh/crack_grown.txt to mesh/crack.txt and run again.\n";
+        }
+        else
+        {
+            std::cout << "Crack did not grow on this step.\n";
+        }
+    }
 
     unsigned int idx;
     for (int i = 0; i < wn; i++)
@@ -1546,13 +1233,7 @@ int main()
                                      glm::vec4{0.0f, 1.0f, 0.0f, 1.0f}});
         }
     }
-    // stress
-    std::vector<Eigen::Vector3d> nodalStress(mesh.vertices.size(), Eigen::Vector3d::Zero());
-    std::vector<int> nodalCount(mesh.vertices.size(), 0);
-    for (const int element_id : enriched_elements.regular)
-    {
-        const std::array<int, 4> element = mesh.elements[element_id];
-    }
+
     PolygonalChain crack_chain;
 
     crack_chain.color = glm::vec4(0.0f, 1.0f, 1.0f, 1.0f);
@@ -1761,19 +1442,6 @@ int main()
         xfem_shader.use();
         glm::mat4 view = camera.GetViewMatrix();
         glm::mat4 MVP = projection * view;
-        // xfem_shader.setMat4("mvp", MVP);
-        // xfem_shader.setVec4("color", 1.0f, 0.0f, 0.0f, 1.0f);
-        // // glBindVertexArray(VAO);
-        // // glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-        // // glDrawElements(GL_TRIANGLES, indices.size() * 3, GL_UNSIGNED_INT, (void *)0);
-        // glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        // if (rectangles.size())
-        // {
-        //     rectangle_shader.use();
-        //     rectangle_shader.setMat4("mvp", MVP);
-        //     glBindVertexArray(rectangleVAO);
-        //     glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, rectangles.size());
-        // }
 
         quad_shader.use();
         quad_shader.setMat4("mvp", MVP);
@@ -1787,11 +1455,6 @@ int main()
             glBindVertexArray(circleVAO);
             glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, circles_vertices_number, circles.size());
         }
-        // xfem_shader.use();
-        // xfem_shader.setMat4("mvp", MVP);
-        // xfem_shader.setVec4("color", 0.0f, 1.0f, 1.0f, 1.0f);
-        // glBindVertexArray(lineVAO);
-        // glDrawElements(GL_LINES, crack_indices.size() * 2, GL_UNSIGNED_INT, (void *)0);
 
         chain_program.use();
         chain_program.setMat4("mvp", MVP);

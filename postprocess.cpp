@@ -1,5 +1,8 @@
 #include "postprocess.h"
 
+#include <algorithm>
+#include <limits>
+
 #include "fem.h"
 #include "misc.h"
 
@@ -619,8 +622,182 @@ void drawTipElements(
         polygonal_chains.push_back(poly_chain_lower);
     }
 }
+
+double computeEquivalentK(double KI, double KII)
+{
+    return std::sqrt(KI * KI + KII * KII);
+}
+
+double computeCrackGrowthAngle(double KI, double KII)
+{
+    const double eps = 1e-14;
+
+    if (std::abs(KII) < eps * std::max(1.0, std::abs(KI)))
+    {
+        return 0.0;
+    }
+
+    return 2.0 * std::atan(
+        (KI - std::sqrt(KI * KI + 8.0 * KII * KII)) /
+        (4.0 * KII)
+    );
+}
+Eigen::Vector2d rotateVector(const Eigen::Vector2d& v, double angle)
+{
+    const double c = std::cos(angle);
+    const double s = std::sin(angle);
+
+    return Eigen::Vector2d{
+        c * v.x() - s * v.y(),
+        s * v.x() + c * v.y()
+    };
+}
+bool pointInsideDomain(
+    const Eigen::Vector2d& p,
+    double w,
+    double h
+)
+{
+    return p.x() >= 0.0 && p.x() <= w &&
+           p.y() >= 0.0 && p.y() <= h;
+}
+bool growCrackOneStep(
+    Crack& crack,
+    const std::vector<TipKResult>& k_results,
+    double KIC,
+    double da,
+    double domain_w,
+    double domain_h
+)
+{
+    if (k_results.empty())
+    {
+        std::cout << "No K results. Crack will not grow.\n";
+        return false;
+    }
+
+    const TipKResult* best = nullptr;
+    double best_Keq = -1.0;
+
+    for (const TipKResult& r : k_results)
+    {
+        const double Keq = computeEquivalentK(r.K_I, r.K_II);
+
+        if (Keq > best_Keq)
+        {
+            best_Keq = Keq;
+            best = &r;
+        }
+    }
+
+    if (best == nullptr)
+    {
+        return false;
+    }
+
+    std::cout << "Growth check: tip = " << best->tip_index
+              << ", KI = " << best->K_I
+              << ", KII = " << best->K_II
+              << ", Keq = " << best_Keq
+              << ", KIC = " << KIC
+              << std::endl;
+
+    if (best_Keq < KIC)
+    {
+        std::cout << "Crack does not grow: Keq < KIC\n";
+        return false;
+    }
+
+    if (crack.vertices.size() < 2 || crack.indices.empty())
+    {
+        throw std::runtime_error("Crack must contain at least one segment");
+    }
+
+    Eigen::Vector2d old_tip;
+    Eigen::Vector2d base_dir;
+
+    if (best->tip_index == 1)
+    {
+        const CrackSegment& first_segment = crack.indices.front();
+
+        old_tip = crack.vertices[first_segment.v0];
+
+        // Для tip 1 направление наружу: от второго узла к первому.
+        base_dir =
+            (crack.vertices[first_segment.v0] -
+             crack.vertices[first_segment.v1]).normalized();
+    }
+    else if (best->tip_index == 2)
+    {
+        const CrackSegment& last_segment = crack.indices.back();
+
+        old_tip = crack.vertices[last_segment.v1];
+
+        // Для tip 2 направление наружу: от предпоследней точки к последней.
+        base_dir =
+            (crack.vertices[last_segment.v1] -
+             crack.vertices[last_segment.v0]).normalized();
+    }
+    else
+    {
+        throw std::runtime_error("Invalid tip_index in growCrackOneStep");
+    }
+
+    const double theta = computeCrackGrowthAngle(best->K_I, best->K_II);
+
+    Eigen::Vector2d growth_dir = rotateVector(base_dir, theta).normalized();
+
+    Eigen::Vector2d new_tip = old_tip + da * growth_dir;
+
+    if (!pointInsideDomain(new_tip, domain_w, domain_h))
+    {
+        std::cout << "Crack growth stopped: new tip is outside domain. "
+                  << "new_tip = " << new_tip.transpose() << "\n";
+        return false;
+    }
+
+    if (best->tip_index == 1)
+    {
+        const int old_first_index = crack.indices.front().v0;
+
+        const int new_index =
+            static_cast<int>(crack.vertices.size());
+
+        crack.vertices.push_back(new_tip);
+
+        // Новый сегмент: new_tip -> old_tip.
+        // Он становится первым сегментом трещины.
+        crack.indices.insert(
+            crack.indices.begin(),
+            CrackSegment{new_index, old_first_index}
+        );
+    }
+    else
+    {
+        const int old_last_index = crack.indices.back().v1;
+
+        const int new_index =
+            static_cast<int>(crack.vertices.size());
+
+        crack.vertices.push_back(new_tip);
+
+        // Новый сегмент: old_tip -> new_tip.
+        crack.indices.push_back(
+            CrackSegment{old_last_index, new_index}
+        );
+    }
+
+    std::cout << "Crack grown at tip " << best->tip_index
+              << ", theta = " << theta
+              << ", old_tip = " << old_tip.transpose()
+              << ", new_tip = " << new_tip.transpose()
+              << std::endl;
+
+    return true;
+}
+
 template <unsigned int NGauss>
-void computeStress(const std::vector<TipEnriched> &tip_enriched,
+std::vector<TipKResult> computeStress(const std::vector<TipEnriched> &tip_enriched,
                    const std::vector<HeavisideEnriched> &heaviside_enriched, const QuadMesh &mesh,
                    const std::vector<TipTriangulation> &tip_enriched_triangulation,
                    const std::vector<HeavisideTriangulation> &heaviside_enriched_triangulation,
@@ -633,6 +810,8 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched,
                    const Eigen::Vector2d &crack_tip_2_n, const Eigen::Matrix3d &D, const double young_modulus,
                    const double poisson_ratio, const double Rin, const double Rout)
 {
+    std::vector<TipKResult> results;
+
     const double E = young_modulus;
     const double nu = poisson_ratio;
     const double shear_modulus = E / (2.0 * (1.0 + nu));
@@ -1364,12 +1543,19 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched,
         std::cout << "tip_index = " << static_cast<int>(tip_data.tip_index) << ", used_elements = " << used_elements
                   << ", K_I = " << K_I << ", K_II = " << K_II
                   << ", |KII/KI| = " << (std::abs(K_I) > 1e-14 ? std::abs(K_II / K_I) : 0.0) << std::endl;
+        results.push_back(TipKResult{
+            static_cast<int>(tip_data.tip_index),
+            K_I,
+            K_II,
+            used_elements
+        });
     }
+    return results;
 }
 
 // It turns out that for templates we need to either implement a function in a header file or explicitly create a
 // template as shown below
-template void computeStress<13>(
+template std::vector<TipKResult> computeStress<13>(
     const std::vector<TipEnriched> &tip_enriched, const std::vector<HeavisideEnriched> &heaviside_enriched,
     const QuadMesh &mesh, const std::vector<TipTriangulation> &tip_enriched_triangulation,
     const std::vector<HeavisideTriangulation> &heaviside_enriched_triangulation, const Eigen::VectorXd &u_solu,
@@ -1379,3 +1565,754 @@ template void computeStress<13>(
     const Eigen::Vector2d &crack_tip_1_t, const Eigen::Vector2d &crack_tip_1_n, const Eigen::Vector2d &crack_tip_2_t,
     const Eigen::Vector2d &crack_tip_2_n, const Eigen::Matrix3d &D, const double young_modulus,
     const double poisson_ratio, const double Rin, const double Rout);
+
+
+void computeCrackTipDirections(
+    const Crack& crack,
+    Eigen::Vector2d& crack_tip_1_t,
+    Eigen::Vector2d& crack_tip_1_n,
+    Eigen::Vector2d& crack_tip_2_t,
+    Eigen::Vector2d& crack_tip_2_n
+)
+{
+    if (crack.indices.empty())
+    {
+        throw std::runtime_error("Crack has no segments");
+    }
+
+    const CrackSegment& first_segment = crack.indices.front();
+
+    Eigen::Vector2d first_dir =
+        crack.vertices[first_segment.v0] -
+        crack.vertices[first_segment.v1];
+
+    crack_tip_1_t = first_dir.normalized();
+
+    crack_tip_1_n = Eigen::Vector2d{
+        -crack_tip_1_t.y(),
+         crack_tip_1_t.x()
+    };
+
+    const CrackSegment& last_segment = crack.indices.back();
+
+    Eigen::Vector2d last_dir =
+        crack.vertices[last_segment.v1] -
+        crack.vertices[last_segment.v0];
+
+    crack_tip_2_t = last_dir.normalized();
+
+    crack_tip_2_n = Eigen::Vector2d{
+        -crack_tip_2_t.y(),
+         crack_tip_2_t.x()
+    };
+}
+void drawVonMisesStressField(
+    const std::vector<TipEnriched>& tip_enriched,
+    const std::vector<HeavisideEnriched>& heaviside_enriched,
+    const QuadMesh& mesh,
+    const std::vector<TipTriangulation>& tip_enriched_triangulation,
+    const std::vector<HeavisideTriangulation>& heaviside_enriched_triangulation,
+    const Eigen::VectorXd& u_solu,
+    const std::vector<unsigned int>& node_offset,
+    const std::vector<bool>& heaviside_enriched_nodes,
+    const std::vector<bool>& tip_enriched_nodes,
+    const std::vector<LevelSetSign>& vertices_level_set_signs,
+    const Eigen::Vector2d& crack_tip_1_t,
+    const Eigen::Vector2d& crack_tip_1_n,
+    const Eigen::Vector2d& crack_tip_2_t,
+    const Eigen::Vector2d& crack_tip_2_n,
+    const Eigen::Matrix3d& D,
+    double scale
+)
+{
+    struct StressTriangle
+    {
+        Eigen::Vector2d p0;
+        Eigen::Vector2d p1;
+        Eigen::Vector2d p2;
+        double value = 0.0;
+    };
+
+    struct TipContext
+    {
+        bool valid = false;
+        Eigen::Vector2d tip_point = Eigen::Vector2d::Zero();
+        Eigen::Vector2d t_vec = Eigen::Vector2d::UnitX();
+        Eigen::Vector2d n_vec = Eigen::Vector2d::UnitY();
+        std::array<std::array<double, 4>, 4> f_nodes;
+    };
+
+    auto quadShape = [](double xi, double eta) {
+        LinearQuad::ShapeData shape;
+
+        shape.N[0] = 0.25 * (1.0 - xi) * (1.0 - eta);
+        shape.N[1] = 0.25 * (1.0 + xi) * (1.0 - eta);
+        shape.N[2] = 0.25 * (1.0 + xi) * (1.0 + eta);
+        shape.N[3] = 0.25 * (1.0 - xi) * (1.0 + eta);
+
+        shape.dN_xi_eta(0, 0) = -0.25 * (1.0 - eta);
+        shape.dN_xi_eta(1, 0) = -0.25 * (1.0 - xi);
+
+        shape.dN_xi_eta(0, 1) = 0.25 * (1.0 - eta);
+        shape.dN_xi_eta(1, 1) = -0.25 * (1.0 + xi);
+
+        shape.dN_xi_eta(0, 2) = 0.25 * (1.0 + eta);
+        shape.dN_xi_eta(1, 2) = 0.25 * (1.0 + xi);
+
+        shape.dN_xi_eta(0, 3) = -0.25 * (1.0 + eta);
+        shape.dN_xi_eta(1, 3) = 0.25 * (1.0 - xi);
+
+        return shape;
+    };
+
+    auto vonMisesPlaneStress = [](const Eigen::Vector3d& stress) -> double {
+        const double sx = stress(0);
+        const double sy = stress(1);
+        const double txy = stress(2);
+
+        return std::sqrt(
+            sx * sx -
+            sx * sy +
+            sy * sy +
+            3.0 * txy * txy
+        );
+    };
+
+    auto colorMap = [](double value, double vmin, double vmax) -> glm::vec4 {
+        double t = 0.0;
+
+        if (vmax > vmin)
+        {
+            t = (value - vmin) / (vmax - vmin);
+        }
+
+        t = std::clamp(t, 0.0, 1.0);
+
+        double r = 0.0;
+        double g = 0.0;
+        double b = 0.0;
+
+        if (t < 0.25)
+        {
+            const double q = t / 0.25;
+            r = 0.0;
+            g = q;
+            b = 1.0;
+        }
+        else if (t < 0.5)
+        {
+            const double q = (t - 0.25) / 0.25;
+            r = 0.0;
+            g = 1.0;
+            b = 1.0 - q;
+        }
+        else if (t < 0.75)
+        {
+            const double q = (t - 0.5) / 0.25;
+            r = q;
+            g = 1.0;
+            b = 0.0;
+        }
+        else
+        {
+            const double q = (t - 0.75) / 0.25;
+            r = 1.0;
+            g = 1.0 - q;
+            b = 0.0;
+        }
+
+        return glm::vec4{
+            static_cast<float>(r),
+            static_cast<float>(g),
+            static_cast<float>(b),
+            1.0f
+        };
+    };
+
+    auto makeTipContext = [&](
+        const TipEnriched& tip_data,
+        const std::array<int, 4>& element,
+        const Eigen::Matrix<double, 4, 2>& coords
+    ) -> TipContext {
+        TipContext ctx;
+        ctx.valid = true;
+
+        const double xi_tip = tip_data.tip_point_local_coords.x();
+        const double eta_tip = tip_data.tip_point_local_coords.y();
+
+        const LinearQuad::ShapeData tip_shape =
+            quadShape(xi_tip, eta_tip);
+
+        ctx.tip_point.setZero();
+
+        for (int n = 0; n < 4; ++n)
+        {
+            ctx.tip_point +=
+                tip_shape.N[n] * coords.row(n).transpose();
+        }
+
+        if (tip_data.tip_index == 1)
+        {
+            ctx.t_vec = crack_tip_1_t.normalized();
+            ctx.n_vec = crack_tip_1_n.normalized();
+        }
+        else
+        {
+            ctx.t_vec = crack_tip_2_t.normalized();
+            ctx.n_vec = crack_tip_2_n.normalized();
+        }
+
+        for (int n = 0; n < 4; ++n)
+        {
+            const Eigen::Vector2d d =
+                coords.row(n).transpose() - ctx.tip_point;
+
+            const double x1 = d.dot(ctx.t_vec);
+            const double x2 = d.dot(ctx.n_vec);
+
+            const double r = std::sqrt(x1 * x1 + x2 * x2);
+
+            if (r < 1e-30)
+            {
+                ctx.f_nodes[n] = {0.0, 0.0, 0.0, 0.0};
+                continue;
+            }
+
+            const double theta = std::atan2(x2, x1);
+            const double sqrt_r = std::sqrt(r);
+            const double sin_half = std::sin(theta / 2.0);
+            const double cos_half = std::cos(theta / 2.0);
+            const double sin_theta = std::sin(theta);
+
+            ctx.f_nodes[n] = {
+                sqrt_r * sin_half,
+                sqrt_r * cos_half,
+                sqrt_r * sin_theta * sin_half,
+                sqrt_r * sin_theta * cos_half
+            };
+        }
+
+        return ctx;
+    };
+
+    struct FieldValue
+    {
+        Eigen::Vector2d deformed_point = Eigen::Vector2d::Zero();
+        Eigen::Vector3d stress = Eigen::Vector3d::Zero();
+        double von_mises = 0.0;
+    };
+
+    auto evalFieldAtPoint = [&](
+        const std::array<int, 4>& element,
+        const Eigen::Matrix<double, 4, 2>& coords,
+        double xi,
+        double eta,
+        int forced_H_value,
+        bool use_heaviside,
+        bool use_tip,
+        const TipContext* tip_ctx
+    ) -> FieldValue {
+        FieldValue out;
+
+        const LinearQuad::ShapeData shape =
+            quadShape(xi, eta);
+
+        LinearTriangle::JacobianData jd;
+        jd.J = shape.dN_xi_eta * coords;
+
+        bool invertible = false;
+        jd.J.computeInverseAndDetWithCheck(
+            jd.invJ,
+            jd.detJ,
+            invertible,
+            1e-12
+        );
+
+        if (!invertible)
+        {
+            throw std::runtime_error(
+                "drawVonMisesStressField: Jacobi matrix is not invertible"
+            );
+        }
+
+        const Eigen::Matrix<double, 2, 4> dN_dx_dy =
+            jd.invJ * shape.dN_xi_eta;
+
+        Eigen::Vector2d x_global = Eigen::Vector2d::Zero();
+
+        for (int n = 0; n < 4; ++n)
+        {
+            x_global += shape.N[n] * coords.row(n).transpose();
+        }
+
+        Eigen::Vector2d u_global = Eigen::Vector2d::Zero();
+        Eigen::Matrix2d grad_u;
+        grad_u.setZero();
+
+        for (int n = 0; n < 4; ++n)
+        {
+            const int node = element[n];
+            const int off = node_offset[node];
+
+            const double Nn = shape.N[n];
+            const double dNdx = dN_dx_dy(0, n);
+            const double dNdy = dN_dx_dy(1, n);
+
+            const double ux = u_solu(off);
+            const double uy = u_solu(off + 1);
+
+            u_global += Nn * Eigen::Vector2d{ux, uy};
+
+            grad_u(0, 0) += dNdx * ux;
+            grad_u(0, 1) += dNdy * ux;
+            grad_u(1, 0) += dNdx * uy;
+            grad_u(1, 1) += dNdy * uy;
+
+            if (use_heaviside && heaviside_enriched_nodes[node])
+            {
+                const int H_i =
+                    vertices_level_set_signs[node].sign;
+
+                const double H_shift =
+                    static_cast<double>(forced_H_value - H_i);
+
+                const double ax = u_solu(off + 2);
+                const double ay = u_solu(off + 3);
+
+                u_global +=
+                    Nn * H_shift * Eigen::Vector2d{ax, ay};
+
+                grad_u(0, 0) += dNdx * H_shift * ax;
+                grad_u(0, 1) += dNdy * H_shift * ax;
+                grad_u(1, 0) += dNdx * H_shift * ay;
+                grad_u(1, 1) += dNdy * H_shift * ay;
+            }
+        }
+
+        if (use_tip && tip_ctx != nullptr && tip_ctx->valid)
+        {
+            const Eigen::Vector2d d =
+                x_global - tip_ctx->tip_point;
+
+            const double x1 = d.dot(tip_ctx->t_vec);
+            const double x2 = d.dot(tip_ctx->n_vec);
+
+            const double r2 = x1 * x1 + x2 * x2;
+            const double r = std::sqrt(r2);
+
+            if (r > 1e-14)
+            {
+                const double theta = std::atan2(x2, x1);
+
+                const double sqrt_r = std::sqrt(r);
+                const double inv_sqrt_r = 1.0 / sqrt_r;
+
+                const double sin_half = std::sin(theta / 2.0);
+                const double cos_half = std::cos(theta / 2.0);
+                const double sin_theta = std::sin(theta);
+                const double cos_theta = std::cos(theta);
+
+                std::array<double, 4> f = {
+                    sqrt_r * sin_half,
+                    sqrt_r * cos_half,
+                    sqrt_r * sin_theta * sin_half,
+                    sqrt_r * sin_theta * cos_half
+                };
+
+                std::array<double, 4> df_dr;
+                std::array<double, 4> df_dtheta;
+
+                df_dr[0] = 0.5 * inv_sqrt_r * sin_half;
+                df_dr[1] = 0.5 * inv_sqrt_r * cos_half;
+                df_dr[2] = 0.5 * inv_sqrt_r * sin_half * sin_theta;
+                df_dr[3] = 0.5 * inv_sqrt_r * cos_half * sin_theta;
+
+                df_dtheta[0] =
+                    sqrt_r * 0.5 * cos_half;
+
+                df_dtheta[1] =
+                    -sqrt_r * 0.5 * sin_half;
+
+                df_dtheta[2] =
+                    sqrt_r *
+                    (
+                        0.5 * cos_half * sin_theta +
+                        sin_half * cos_theta
+                    );
+
+                df_dtheta[3] =
+                    sqrt_r *
+                    (
+                        -0.5 * sin_half * sin_theta +
+                        cos_half * cos_theta
+                    );
+
+                const double drdx = d.x() / r;
+                const double drdy = d.y() / r;
+
+                const double dtheta_dx =
+                    (x1 * tip_ctx->n_vec.x() -
+                     x2 * tip_ctx->t_vec.x()) / r2;
+
+                const double dtheta_dy =
+                    (x1 * tip_ctx->n_vec.y() -
+                     x2 * tip_ctx->t_vec.y()) / r2;
+
+                std::array<Eigen::Vector2d, 4> df_dx;
+
+                for (int a = 0; a < 4; ++a)
+                {
+                    df_dx[a].x() =
+                        df_dr[a] * drdx +
+                        df_dtheta[a] * dtheta_dx;
+
+                    df_dx[a].y() =
+                        df_dr[a] * drdy +
+                        df_dtheta[a] * dtheta_dy;
+                }
+
+                for (int n = 0; n < 4; ++n)
+                {
+                    const int node = element[n];
+                    const int off = node_offset[node];
+
+                    const double Nn = shape.N[n];
+                    const double dNdx = dN_dx_dy(0, n);
+                    const double dNdy = dN_dx_dy(1, n);
+
+                    if (!tip_enriched_nodes[node])
+                    {
+                        continue;
+                    }
+
+                    for (int a = 0; a < 4; ++a)
+                    {
+                        const double bx =
+                            u_solu(off + 4 + 2 * a);
+
+                        const double by =
+                            u_solu(off + 4 + 2 * a + 1);
+
+                        const double shift =
+                            f[a] - tip_ctx->f_nodes[n][a];
+
+                        const double d_enr_dx =
+                            dNdx * shift +
+                            Nn * df_dx[a].x();
+
+                        const double d_enr_dy =
+                            dNdy * shift +
+                            Nn * df_dx[a].y();
+
+                        u_global +=
+                            Nn * shift * Eigen::Vector2d{bx, by};
+
+                        grad_u(0, 0) += d_enr_dx * bx;
+                        grad_u(0, 1) += d_enr_dy * bx;
+                        grad_u(1, 0) += d_enr_dx * by;
+                        grad_u(1, 1) += d_enr_dy * by;
+                    }
+                }
+            }
+        }
+
+        out.deformed_point =
+            x_global + scale * u_global;
+
+        Eigen::Vector3d strain;
+        strain << grad_u(0, 0),
+                  grad_u(1, 1),
+                  grad_u(0, 1) + grad_u(1, 0);
+
+        out.stress = D * strain;
+        out.von_mises = vonMisesPlaneStress(out.stress);
+
+        return out;
+    };
+
+    std::vector<int> tip_element_to_index(
+        mesh.elements.size(),
+        -1
+    );
+
+    for (int i = 0; i < static_cast<int>(tip_enriched.size()); ++i)
+    {
+        tip_element_to_index[tip_enriched[i].id] = i;
+    }
+
+    std::vector<int> heaviside_element_to_index(
+        mesh.elements.size(),
+        -1
+    );
+
+    for (int i = 0; i < static_cast<int>(heaviside_enriched.size()); ++i)
+    {
+        heaviside_element_to_index[heaviside_enriched[i].id] = i;
+    }
+
+    std::vector<StressTriangle> stress_triangles;
+
+    auto addStressTriangle = [&](
+        const std::array<int, 4>& element,
+        const Eigen::Matrix<double, 4, 2>& coords,
+        const std::array<Eigen::Vector2d, 3>& local_tri,
+        int forced_H_value,
+        bool use_heaviside,
+        bool use_tip,
+        const TipContext* tip_ctx
+    ) {
+        const double xi_c =
+            (local_tri[0].x() + local_tri[1].x() + local_tri[2].x()) / 3.0;
+
+        const double eta_c =
+            (local_tri[0].y() + local_tri[1].y() + local_tri[2].y()) / 3.0;
+
+        const FieldValue c =
+            evalFieldAtPoint(
+                element,
+                coords,
+                xi_c,
+                eta_c,
+                forced_H_value,
+                use_heaviside,
+                use_tip,
+                tip_ctx
+            );
+
+        const FieldValue v0 =
+            evalFieldAtPoint(
+                element,
+                coords,
+                local_tri[0].x(),
+                local_tri[0].y(),
+                forced_H_value,
+                use_heaviside,
+                use_tip,
+                tip_ctx
+            );
+
+        const FieldValue v1 =
+            evalFieldAtPoint(
+                element,
+                coords,
+                local_tri[1].x(),
+                local_tri[1].y(),
+                forced_H_value,
+                use_heaviside,
+                use_tip,
+                tip_ctx
+            );
+
+        const FieldValue v2 =
+            evalFieldAtPoint(
+                element,
+                coords,
+                local_tri[2].x(),
+                local_tri[2].y(),
+                forced_H_value,
+                use_heaviside,
+                use_tip,
+                tip_ctx
+            );
+
+        StressTriangle tri;
+        tri.p0 = v0.deformed_point;
+        tri.p1 = v1.deformed_point;
+        tri.p2 = v2.deformed_point;
+        tri.value = c.von_mises;
+
+        stress_triangles.push_back(tri);
+    };
+
+    for (int elem_id = 0; elem_id < static_cast<int>(mesh.elements.size()); ++elem_id)
+    {
+        const std::array<int, 4>& element =
+            mesh.elements[elem_id];
+
+        Eigen::Matrix<double, 4, 2> coords;
+
+        for (int n = 0; n < 4; ++n)
+        {
+            coords.row(n) = mesh.vertices[element[n]];
+        }
+
+        const int tip_index =
+            tip_element_to_index[elem_id];
+
+        const int h_index =
+            heaviside_element_to_index[elem_id];
+
+        if (tip_index >= 0)
+        {
+            const TipEnriched& tip_data =
+                tip_enriched[tip_index];
+
+            const TipTriangulation& triangulation =
+                tip_enriched_triangulation[tip_index];
+
+            TipContext tip_ctx =
+                makeTipContext(
+                    tip_data,
+                    element,
+                    coords
+                );
+
+            std::array<Eigen::Vector2d, 6> local_points = {
+                Eigen::Vector2d{-1.0, -1.0},
+                Eigen::Vector2d{ 1.0, -1.0},
+                Eigen::Vector2d{ 1.0,  1.0},
+                Eigen::Vector2d{-1.0,  1.0},
+                tip_data.intersection_point_local_coords,
+                tip_data.tip_point_local_coords
+            };
+
+            for (unsigned int tri_id = 0; tri_id < 5; ++tri_id)
+            {
+                const std::array<unsigned char, 3>& tri =
+                    triangulation.tri_indices[tri_id];
+
+                std::array<Eigen::Vector2d, 3> local_tri = {
+                    local_points[tri[0]],
+                    local_points[tri[1]],
+                    local_points[tri[2]]
+                };
+
+                addStressTriangle(
+                    element,
+                    coords,
+                    local_tri,
+                    0,
+                    false,
+                    true,
+                    &tip_ctx
+                );
+            }
+        }
+        else if (h_index >= 0)
+        {
+            const HeavisideEnriched& h_data =
+                heaviside_enriched[h_index];
+
+            const HeavisideTriangulation& triangulation =
+                heaviside_enriched_triangulation[h_index];
+
+            std::array<Eigen::Vector2d, 6> local_points = {
+                Eigen::Vector2d{-1.0, -1.0},
+                Eigen::Vector2d{ 1.0, -1.0},
+                Eigen::Vector2d{ 1.0,  1.0},
+                Eigen::Vector2d{-1.0,  1.0},
+                h_data.intersection_points_local_coords[0],
+                h_data.intersection_points_local_coords[1]
+            };
+
+            for (unsigned int tri_id = 0;
+                 tri_id < triangulation.triangles_num;
+                 ++tri_id)
+            {
+                const std::array<unsigned char, 3>& tri =
+                    triangulation.tri_indices[tri_id];
+
+                std::array<Eigen::Vector2d, 3> local_tri = {
+                    local_points[tri[0]],
+                    local_points[tri[1]],
+                    local_points[tri[2]]
+                };
+
+                // Это должно совпадать с твоей сборкой Heaviside.
+                // В твоём main сейчас первая группа sign=+1,
+                // после positive_heaviside_triangles_num sign=-1.
+                const int H_value =
+                    tri_id < triangulation.positive_heaviside_triangles_num
+                        ? +1
+                        : -1;
+
+                addStressTriangle(
+                    element,
+                    coords,
+                    local_tri,
+                    H_value,
+                    true,
+                    false,
+                    nullptr
+                );
+            }
+        }
+        else
+        {
+            const std::array<Eigen::Vector2d, 3> tri_1 = {
+                Eigen::Vector2d{-1.0, -1.0},
+                Eigen::Vector2d{ 1.0, -1.0},
+                Eigen::Vector2d{ 1.0,  1.0}
+            };
+
+            const std::array<Eigen::Vector2d, 3> tri_2 = {
+                Eigen::Vector2d{-1.0, -1.0},
+                Eigen::Vector2d{ 1.0,  1.0},
+                Eigen::Vector2d{-1.0,  1.0}
+            };
+
+            addStressTriangle(
+                element,
+                coords,
+                tri_1,
+                0,
+                false,
+                false,
+                nullptr
+            );
+
+            addStressTriangle(
+                element,
+                coords,
+                tri_2,
+                0,
+                false,
+                false,
+                nullptr
+            );
+        }
+    }
+
+    if (stress_triangles.empty())
+    {
+        std::cout << "drawVonMisesStressField: no stress triangles\n";
+        return;
+    }
+
+    double vmin = std::numeric_limits<double>::max();
+    double vmax = -std::numeric_limits<double>::max();
+
+    for (const StressTriangle& tri : stress_triangles)
+    {
+        if (!std::isfinite(tri.value))
+        {
+            continue;
+        }
+
+        vmin = std::min(vmin, tri.value);
+        vmax = std::max(vmax, tri.value);
+    }
+
+    if (!(vmax > vmin))
+    {
+        vmax = vmin + 1.0;
+    }
+
+    std::cout << "Von Mises stress range: "
+              << vmin << " ... " << vmax << std::endl;
+
+    for (const StressTriangle& tri : stress_triangles)
+    {
+        const glm::vec4 color =
+            colorMap(tri.value, vmin, vmax);
+
+        TriangleGUI::Renderer::instance().addTriangle(
+            TriangleGUI::TriangleColored{
+                toGlm(tri.p0.cast<float>().eval()),
+                toGlm(tri.p1.cast<float>().eval()),
+                toGlm(tri.p2.cast<float>().eval()),
+                TriangleGUI::packColor(color)
+            }
+        );
+    }
+}

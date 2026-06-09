@@ -219,12 +219,15 @@ bool inverseMapping(const Eigen::Vector2d& point,
     return false; // not converged
 }
 
-static double cross2d(const Eigen::Vector2d& a, const Eigen::Vector2d& b)
+static double cross2d(
+    const Eigen::Vector2d& a,
+    const Eigen::Vector2d& b
+)
 {
     return a.x() * b.y() - a.y() * b.x();
 }
 
-static bool segmentIntersection(
+static bool segmentIntersection2D(
     const Eigen::Vector2d& P,
     const Eigen::Vector2d& Q,
     const Eigen::Vector2d& A,
@@ -233,13 +236,13 @@ static bool segmentIntersection(
     double& t
 )
 {
-    // P + s * (Q - P) = A + t * (B - A)
     const Eigen::Vector2d r = Q - P;
     const Eigen::Vector2d e = B - A;
 
     const double denom = cross2d(r, e);
 
-    if (std::abs(denom) < 1e-14) {
+    if (std::abs(denom) < 1e-14)
+    {
         return false;
     }
 
@@ -248,71 +251,86 @@ static bool segmentIntersection(
     s = cross2d(AP, e) / denom;
     t = cross2d(AP, r) / denom;
 
-    const double eps = 1e-12;
+    const double eps = 1e-10;
 
-    return s >= -eps && s <= 1.0 + eps &&
-           t >= -eps && t <= 1.0 + eps;
+    return s > eps &&
+           s <= 1.0 + eps &&
+           t >= -eps &&
+           t <= 1.0 + eps;
 }
 
-static bool findTipElementExitPoint(
+struct TipExitEdgeResult
+{
+    int edge = -1;
+    Eigen::Vector2d point_global = Eigen::Vector2d::Zero();
+};
+static TipExitEdgeResult findTipExitEdgeByGeometry(
+    const QuadMesh& mesh,
     const std::array<int, 4>& element,
-    const QuadMesh& quad_mesh,
     const Eigen::Vector2d& tip_point,
     const Eigen::Vector2d& next_crack_point,
-    Eigen::Vector2d& intersection_point_local_coords,
-    unsigned char& intersected_edge
+    int tip_index
 )
 {
-    const std::array<Eigen::Vector2d, 4> local_edge_points = {
-        Eigen::Vector2d{-1.0, -1.0},
-        Eigen::Vector2d{ 1.0, -1.0},
-        Eigen::Vector2d{ 1.0,  1.0},
-        Eigen::Vector2d{-1.0,  1.0}
-    };
+    TipExitEdgeResult result;
 
-    int found_count = 0;
+    double best_s = 1e100;
 
-    for (int edge = 0; edge < 4; ++edge) {
-        const int n0 = element[edge];
-        const int n1 = element[(edge + 1) % 4];
+    for (int edge = 0; edge < 4; ++edge)
+    {
+        const int n0 = edge;
+        const int n1 = (edge + 1) % 4;
 
-        const Eigen::Vector2d A = quad_mesh.vertices[n0];
-        const Eigen::Vector2d B = quad_mesh.vertices[n1];
+        const Eigen::Vector2d A =
+            mesh.vertices[element[n0]];
+
+        const Eigen::Vector2d B =
+            mesh.vertices[element[n1]];
 
         double s = 0.0;
         double t = 0.0;
 
-        const bool ok = segmentIntersection(
-            tip_point,
-            next_crack_point,
-            A,
-            B,
-            s,
-            t
-        );
+        const bool hit =
+            segmentIntersection2D(
+                tip_point,
+                next_crack_point,
+                A,
+                B,
+                s,
+                t
+            );
 
-        if (!ok) {
+        if (!hit)
+        {
             continue;
         }
 
-        // s = 0 means exactly at tip point.
-        // We need the exit point away from the tip.
-        if (s < 1e-10) {
-            continue;
+        if (s < best_s)
+        {
+            best_s = s;
+            result.edge = edge;
+            result.point_global =
+                tip_point + s * (next_crack_point - tip_point);
         }
-
-        const Eigen::Vector2d local_A = local_edge_points[edge];
-        const Eigen::Vector2d local_B = local_edge_points[(edge + 1) % 4];
-
-        intersection_point_local_coords =
-            local_A + t * (local_B - local_A);
-
-        intersected_edge = static_cast<unsigned char>(edge);
-
-        ++found_count;
     }
 
-    return found_count == 1;
+    if (result.edge < 0)
+    {
+        std::cout << "Cannot find exit edge geometrically.\n";
+        std::cout << "tip_index = " << tip_index << "\n";
+        std::cout << "tip_point = " << tip_point.transpose() << "\n";
+        std::cout << "next_crack_point = " << next_crack_point.transpose() << "\n";
+        std::cout << "segment length = "
+                  << (next_crack_point - tip_point).norm()
+                  << "\n";
+
+        throw std::runtime_error(
+            "Cannot find unique exit edge for tip element: "
+            "crack segment may be too short and may not cross element boundary"
+        );
+    }
+
+    return result;
 }
 
 EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMesh& quad_mesh, const Crack& crack, const LevelSetFields& level_set_fields){
@@ -357,25 +375,23 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
             Eigen::Vector2d tip_local_coords;
             unsigned char intersected_edge = 0;
 
-            const Eigen::Vector2d& tip_point =
-                crack.vertices[crack.indices[0].v0];
+            const CrackSegment& first_segment = crack.indices.front();
 
-            const Eigen::Vector2d& next_crack_point =
-                crack.vertices[crack.indices[0].v1];
+            const Eigen::Vector2d tip_point =
+                crack.vertices[first_segment.v0];
 
-            const bool found_exit = findTipElementExitPoint(
-                element,
-                quad_mesh,
-                tip_point,
-                next_crack_point,
-                intersection_point_local_coords,
-                intersected_edge
-            );
+            const Eigen::Vector2d next_crack_point =
+                crack.vertices[first_segment.v1];
 
-            if (!found_exit) {
-                throw std::runtime_error("Cannot find unique exit edge for tip 1 element");
-            }
-
+            TipExitEdgeResult exit =
+                findTipExitEdgeByGeometry(
+                    quad_mesh,
+                    element,
+                    tip_point,
+                    next_crack_point,
+                    1
+                );
+        
             const bool ok_inverse = inverseMapping(
                 tip_point,
                 {quad_mesh.vertices[element[0]],
@@ -414,24 +430,22 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
             Eigen::Vector2d tip_local_coords;
             unsigned char intersected_edge = 0;
 
-            const Eigen::Vector2d& previous_crack_point =
-                crack.vertices[crack.indices[crack.indices.size()-1].v0];
+           const CrackSegment& last_segment = crack.indices.back();
 
-            const Eigen::Vector2d& tip_point =
-                crack.vertices[crack.indices[crack.indices.size()-1].v1];
+            const Eigen::Vector2d tip_point =
+                crack.vertices[last_segment.v1];
 
-            const bool found_exit = findTipElementExitPoint(
-                element,
-                quad_mesh,
-                tip_point,
-                previous_crack_point,
-                intersection_point_local_coords,
-                intersected_edge
-            );
+            const Eigen::Vector2d next_crack_point =
+                crack.vertices[last_segment.v0];
 
-            if (!found_exit) {
-                throw std::runtime_error("Cannot find unique exit edge for tip 1 element");
-            }
+            TipExitEdgeResult exit =
+                findTipExitEdgeByGeometry(
+                    quad_mesh,
+                    element,
+                    tip_point,
+                    next_crack_point,
+                    2
+                );
 
             const bool ok_inverse = inverseMapping(
                 tip_point,

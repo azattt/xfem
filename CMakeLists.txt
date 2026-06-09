@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# add_definitions(-DEIGEN_NO_DEBUG -DEIGEN_MPL2_ONLY -DEIGEN_NO_STATIC_ASSERT)
+add_definitions(-DEIGEN_NO_DEBUG -DEIGEN_MPL2_ONLY -DEIGEN_NO_STATIC_ASSERT)
 
 add_library(xfem_core STATIC
   # compute.cpp
@@ -18,7 +18,8 @@ add_executable(xfem main.cpp fem.cpp gui.cpp levelset.cpp
   Q4.cpp
   postprocess.cpp
   misc.cpp
-  BC.cpp)
+  BC.cpp
+  calculate.cpp)
 
 target_link_libraries(xfem xfem_core)
 
