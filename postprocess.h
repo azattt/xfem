@@ -51,6 +51,7 @@ struct TipKResult
     int used_elements = 0;
 };
 
+
 double computeEquivalentK(double KI, double KII);
 
 double computeCrackGrowthAngle(double KI, double KII);

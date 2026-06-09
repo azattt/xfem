@@ -88,7 +88,7 @@ void applyBC(
     // thickness = 0.1
     // sigma = 10000
 
-    const double sigma = 10000.0;
+    const double sigma = 1000000.0;
 
     // Uniform traction on top and bottom edges.
     // The boundary is divided into segments of length dx.

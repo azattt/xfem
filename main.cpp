@@ -1,4 +1,8 @@
+#include <algorithm>
 #include <array>
+#include <ctime>
+#include <cstdio>
+#include <cstring>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -6,6 +10,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <unordered_set>
 #include <variant>
 #include <vector>
@@ -16,6 +21,7 @@
 #include <Eigen/Dense>
 #include <Eigen/src/SVD/JacobiSVD.h>
 
+#include "calculate.h"
 #include "fem.h"
 #include "gui.h"
 #include "levelset.h"
@@ -27,6 +33,13 @@
 
 #include "camera.h"
 #include "shader.h"
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 class RainbowColormap
 {
@@ -286,6 +299,1536 @@ void saveCrackToFile(const Crack &crack, const std::string &filename)
 
     std::cout << "Crack saved to: " << filename << std::endl;
 }
+
+struct GrowthFrame
+{
+    Crack crack;
+    XFemIterationResult solve_result;
+    std::vector<TipKResult> k_results;
+};
+
+struct StressTriangleValue
+{
+    Eigen::Vector2d p0;
+    Eigen::Vector2d p1;
+    Eigen::Vector2d p2;
+    double value = 0.0;
+};
+
+struct GrowthFrameVisual
+{
+    std::vector<Quad> quads;
+    std::vector<Circle> circles;
+    std::vector<Vertex> crack_vertices;
+
+    // Raw von Mises triangles before coloring.
+    // They are converted to von_mises_vertices after a global color range is known.
+    std::vector<StressTriangleValue> von_mises_triangles;
+    std::vector<Vertex> von_mises_vertices;
+};
+
+
+struct VonMisesScale
+{
+    double vmin = 0.0;
+    double vmax = 1.0;
+};
+
+struct OverlayVertex
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float r = 1.0f;
+    float g = 1.0f;
+    float b = 1.0f;
+};
+
+struct LegendGL
+{
+    GLuint vao_tri = 0;
+    GLuint vbo_tri = 0;
+    GLuint vao_line = 0;
+    GLuint vbo_line = 0;
+    GLsizei tri_count = 0;
+    GLsizei line_count = 0;
+};
+
+static glm::vec3 legendColor(double t)
+{
+    t = std::clamp(t, 0.0, 1.0);
+    return RainbowColormap::getColor(static_cast<float>(t));
+}
+
+static void pushOverlayTriangle(
+    std::vector<OverlayVertex>& verts,
+    const glm::vec2& p0,
+    const glm::vec2& p1,
+    const glm::vec2& p2,
+    const glm::vec3& c0,
+    const glm::vec3& c1,
+    const glm::vec3& c2
+)
+{
+    verts.push_back(OverlayVertex{p0.x, p0.y, c0.r, c0.g, c0.b});
+    verts.push_back(OverlayVertex{p1.x, p1.y, c1.r, c1.g, c1.b});
+    verts.push_back(OverlayVertex{p2.x, p2.y, c2.r, c2.g, c2.b});
+}
+
+static void pushOverlayLine(
+    std::vector<OverlayVertex>& verts,
+    const glm::vec2& p0,
+    const glm::vec2& p1,
+    const glm::vec3& c
+)
+{
+    verts.push_back(OverlayVertex{p0.x, p0.y, c.r, c.g, c.b});
+    verts.push_back(OverlayVertex{p1.x, p1.y, c.r, c.g, c.b});
+}
+
+static void buildVonMisesLegendGeometry(
+    std::vector<OverlayVertex>& tri_verts,
+    std::vector<OverlayVertex>& line_verts
+)
+{
+    tri_verts.clear();
+    line_verts.clear();
+
+    // Normalized device coordinates. This stays fixed at the right side of the window.
+    const float x0 = 0.70f;
+    const float x1 = 0.75f;
+    const float y0 = -0.82f;
+    const float y1 =  0.82f;
+
+    constexpr int segments = 160;
+
+    for (int i = 0; i < segments; ++i)
+    {
+        const float t0 = static_cast<float>(i) / static_cast<float>(segments);
+        const float t1 = static_cast<float>(i + 1) / static_cast<float>(segments);
+
+        const float ya = y0 + (y1 - y0) * t0;
+        const float yb = y0 + (y1 - y0) * t1;
+
+        const glm::vec3 c0 = legendColor(t0);
+        const glm::vec3 c1 = legendColor(t1);
+
+        const glm::vec2 p00{x0, ya};
+        const glm::vec2 p10{x1, ya};
+        const glm::vec2 p01{x0, yb};
+        const glm::vec2 p11{x1, yb};
+
+        pushOverlayTriangle(tri_verts, p00, p10, p11, c0, c0, c1);
+        pushOverlayTriangle(tri_verts, p00, p11, p01, c0, c1, c1);
+    }
+
+    const glm::vec3 white{1.0f, 1.0f, 1.0f};
+
+    // Border.
+    pushOverlayLine(line_verts, {x0, y0}, {x1, y0}, white);
+    pushOverlayLine(line_verts, {x1, y0}, {x1, y1}, white);
+    pushOverlayLine(line_verts, {x1, y1}, {x0, y1}, white);
+    pushOverlayLine(line_verts, {x0, y1}, {x0, y0}, white);
+
+    // Tick marks.
+    constexpr int ticks = 7;
+    for (int i = 0; i < ticks; ++i)
+    {
+        const float t = static_cast<float>(i) / static_cast<float>(ticks - 1);
+        const float y = y0 + (y1 - y0) * t;
+        pushOverlayLine(line_verts, {x1, y}, {x1 + 0.025f, y}, white);
+    }
+}
+
+static void initLegendGL(
+    LegendGL& legend,
+    const std::vector<OverlayVertex>& tri_verts,
+    const std::vector<OverlayVertex>& line_verts
+)
+{
+    glGenVertexArrays(1, &legend.vao_tri);
+    glGenBuffers(1, &legend.vbo_tri);
+
+    glBindVertexArray(legend.vao_tri);
+    glBindBuffer(GL_ARRAY_BUFFER, legend.vbo_tri);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        static_cast<GLsizeiptr>(tri_verts.size() * sizeof(OverlayVertex)),
+        tri_verts.empty() ? nullptr : tri_verts.data(),
+        GL_STATIC_DRAW
+    );
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(OverlayVertex), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(OverlayVertex), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    legend.tri_count = static_cast<GLsizei>(tri_verts.size());
+
+    glGenVertexArrays(1, &legend.vao_line);
+    glGenBuffers(1, &legend.vbo_line);
+
+    glBindVertexArray(legend.vao_line);
+    glBindBuffer(GL_ARRAY_BUFFER, legend.vbo_line);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        static_cast<GLsizeiptr>(line_verts.size() * sizeof(OverlayVertex)),
+        line_verts.empty() ? nullptr : line_verts.data(),
+        GL_STATIC_DRAW
+    );
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(OverlayVertex), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(OverlayVertex), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    legend.line_count = static_cast<GLsizei>(line_verts.size());
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+}
+
+static void drawLegendGL(const LegendGL& legend)
+{
+    glBindVertexArray(legend.vao_tri);
+    glDrawArrays(GL_TRIANGLES, 0, legend.tri_count);
+
+    glBindVertexArray(legend.vao_line);
+    glLineWidth(1.5f);
+    glDrawArrays(GL_LINES, 0, legend.line_count);
+
+    glBindVertexArray(0);
+}
+
+
+struct TextVertex
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float u = 0.0f;
+    float v = 0.0f;
+    float r = 1.0f;
+    float g = 1.0f;
+    float b = 1.0f;
+    float a = 1.0f;
+};
+
+struct FontGlyph
+{
+    float u0 = 0.0f;
+    float v0 = 0.0f;
+    float u1 = 0.0f;
+    float v1 = 0.0f;
+    int width = 0;
+    int height = 0;
+    int advance = 0;
+};
+
+struct FontAtlasGL
+{
+    GLuint texture = 0;
+    GLuint vao = 0;
+    GLuint vbo = 0;
+    int atlas_width = 0;
+    int atlas_height = 0;
+    int line_height = 0;
+    std::array<FontGlyph, 128> glyphs{};
+    GLsizei vertex_count = 0;
+};
+
+static glm::vec2 pixelToNdc(float x_px, float y_px, int screen_w, int screen_h)
+{
+    return glm::vec2{
+        2.0f * x_px / static_cast<float>(screen_w) - 1.0f,
+        1.0f - 2.0f * y_px / static_cast<float>(screen_h)
+    };
+}
+
+static float measureTextWidthPx(const FontAtlasGL& font, const std::string& text)
+{
+    float width = 0.0f;
+
+    for (char c : text)
+    {
+        const unsigned char uc = static_cast<unsigned char>(c);
+
+        if (uc < font.glyphs.size())
+        {
+            width += static_cast<float>(font.glyphs[uc].advance);
+        }
+    }
+
+    return width;
+}
+
+static void pushTextQuad(
+    std::vector<TextVertex>& out,
+    const glm::vec2& p0,
+    const glm::vec2& p1,
+    const glm::vec2& p2,
+    const glm::vec2& p3,
+    const FontGlyph& g,
+    const glm::vec4& color
+)
+{
+    out.push_back(TextVertex{p0.x, p0.y, g.u0, g.v0, color.r, color.g, color.b, color.a});
+    out.push_back(TextVertex{p1.x, p1.y, g.u1, g.v0, color.r, color.g, color.b, color.a});
+    out.push_back(TextVertex{p2.x, p2.y, g.u1, g.v1, color.r, color.g, color.b, color.a});
+
+    out.push_back(TextVertex{p0.x, p0.y, g.u0, g.v0, color.r, color.g, color.b, color.a});
+    out.push_back(TextVertex{p2.x, p2.y, g.u1, g.v1, color.r, color.g, color.b, color.a});
+    out.push_back(TextVertex{p3.x, p3.y, g.u0, g.v1, color.r, color.g, color.b, color.a});
+}
+
+static void appendTextPx(
+    std::vector<TextVertex>& out,
+    const FontAtlasGL& font,
+    const std::string& text,
+    float x_px,
+    float y_px,
+    const glm::vec4& color,
+    int screen_w,
+    int screen_h
+)
+{
+    float pen_x = x_px;
+
+    for (char c : text)
+    {
+        const unsigned char uc = static_cast<unsigned char>(c);
+
+        if (uc >= font.glyphs.size())
+        {
+            continue;
+        }
+
+        const FontGlyph& g = font.glyphs[uc];
+
+        if (g.width > 0 && g.height > 0)
+        {
+            const float x0 = pen_x;
+            const float x1 = pen_x + static_cast<float>(g.width);
+            const float y0 = y_px;
+            const float y1 = y_px + static_cast<float>(g.height);
+
+            const glm::vec2 p0 = pixelToNdc(x0, y0, screen_w, screen_h);
+            const glm::vec2 p1 = pixelToNdc(x1, y0, screen_w, screen_h);
+            const glm::vec2 p2 = pixelToNdc(x1, y1, screen_w, screen_h);
+            const glm::vec2 p3 = pixelToNdc(x0, y1, screen_w, screen_h);
+
+            pushTextQuad(out, p0, p1, p2, p3, g, color);
+        }
+
+        pen_x += static_cast<float>(g.advance);
+    }
+}
+
+static std::string formatLegendValue(double value)
+{
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%.3e", value);
+    return std::string(buffer);
+}
+
+static std::vector<TextVertex> buildLegendTextVertices(
+    const FontAtlasGL& font,
+    const VonMisesScale& scale,
+    int current_frame,
+    int total_frames,
+    int screen_w,
+    int screen_h
+)
+{
+    std::vector<TextVertex> verts;
+
+    const glm::vec4 white{1.0f, 1.0f, 1.0f, 1.0f};
+    const glm::vec4 title_color{0.92f, 0.92f, 0.92f, 1.0f};
+
+    const float bar_x1_ndc = 0.75f;
+    const float y0_ndc = -0.82f;
+    const float y1_ndc = 0.82f;
+
+    const float label_x_px = (bar_x1_ndc + 1.0f) * 0.5f * static_cast<float>(screen_w) + 12.0f;
+
+    const int ticks = 7;
+
+    for (int i = 0; i < ticks; ++i)
+    {
+        const float t = static_cast<float>(i) / static_cast<float>(ticks - 1);
+        const float y_ndc = y0_ndc + (y1_ndc - y0_ndc) * t;
+        const float y_px = (1.0f - y_ndc) * 0.5f * static_cast<float>(screen_h)
+                           - static_cast<float>(font.line_height) * 0.5f;
+
+        const double value = scale.vmin + static_cast<double>(t) * (scale.vmax - scale.vmin);
+        const std::string label = formatLegendValue(value);
+
+        appendTextPx(
+            verts,
+            font,
+            label,
+            label_x_px,
+            y_px,
+            white,
+            screen_w,
+            screen_h
+        );
+    }
+
+    const std::string title = "S: von Mises";
+    const float title_width = measureTextWidthPx(font, title);
+    const float title_x_px = label_x_px - 3.0f;
+    const float title_y_px = (1.0f - y1_ndc) * 0.5f * static_cast<float>(screen_h) - 80.0f;
+
+    appendTextPx(
+        verts,
+        font,
+        title,
+        title_x_px,
+        title_y_px,
+        title_color,
+        screen_w,
+        screen_h
+    );
+
+    char frame_buffer[64];
+    std::snprintf(
+        frame_buffer,
+        sizeof(frame_buffer),
+        "Frame %d / %d",
+        current_frame + 1,
+        total_frames
+    );
+
+    appendTextPx(
+        verts,
+        font,
+        frame_buffer,
+        title_x_px,
+        title_y_px + static_cast<float>(font.line_height) + 4.0f,
+        title_color,
+        screen_w,
+        screen_h
+    );
+
+    return verts;
+}
+
+#ifdef _WIN32
+static FontAtlasGL createWindowsFontAtlasGL(const char* face_name, int pixel_height)
+{
+    FontAtlasGL font;
+
+    constexpr int atlas_w = 1024;
+    constexpr int atlas_h = 512;
+
+    font.atlas_width = atlas_w;
+    font.atlas_height = atlas_h;
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = atlas_w;
+    bmi.bmiHeader.biHeight = -atlas_h; // top-down DIB
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* dib_bits = nullptr;
+    HDC screen_dc = GetDC(nullptr);
+    HDC memory_dc = CreateCompatibleDC(screen_dc);
+
+    HBITMAP bitmap = CreateDIBSection(
+        memory_dc,
+        &bmi,
+        DIB_RGB_COLORS,
+        &dib_bits,
+        nullptr,
+        0
+    );
+
+    if (!bitmap || !dib_bits)
+    {
+        throw std::runtime_error("Failed to create text font DIB section");
+    }
+
+    HGDIOBJ old_bitmap = SelectObject(memory_dc, bitmap);
+
+    HFONT hfont = CreateFontA(
+        -pixel_height,
+        0,
+        0,
+        0,
+        FW_NORMAL,
+        FALSE,
+        FALSE,
+        FALSE,
+        ANSI_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_SWISS,
+        face_name
+    );
+
+    if (!hfont)
+    {
+        hfont = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    }
+
+    HGDIOBJ old_font = SelectObject(memory_dc, hfont);
+
+    std::memset(dib_bits, 0, atlas_w * atlas_h * 4);
+
+    SetBkMode(memory_dc, TRANSPARENT);
+    SetTextColor(memory_dc, RGB(255, 255, 255));
+
+    TEXTMETRICA metrics{};
+    GetTextMetricsA(memory_dc, &metrics);
+    font.line_height = metrics.tmHeight;
+
+    int pen_x = 4;
+    int pen_y = 4;
+    const int margin = 3;
+
+    for (int ch = 32; ch < 127; ++ch)
+    {
+        const char c = static_cast<char>(ch);
+        SIZE size{};
+        GetTextExtentPoint32A(memory_dc, &c, 1, &size);
+
+        int glyph_w = std::max(1L, size.cx);
+        int glyph_h = std::max(1L, metrics.tmHeight);
+
+        if (pen_x + glyph_w + margin >= atlas_w)
+        {
+            pen_x = 4;
+            pen_y += font.line_height + margin;
+        }
+
+        if (pen_y + glyph_h + margin >= atlas_h)
+        {
+            throw std::runtime_error("Font atlas is too small");
+        }
+
+        TextOutA(memory_dc, pen_x, pen_y, &c, 1);
+
+        FontGlyph glyph;
+        glyph.width = glyph_w;
+        glyph.height = glyph_h;
+        glyph.advance = std::max((long)glyph_w, (long)size.cx) + 1;
+        glyph.u0 = static_cast<float>(pen_x) / static_cast<float>(atlas_w);
+        glyph.v0 = static_cast<float>(pen_y) / static_cast<float>(atlas_h);
+        glyph.u1 = static_cast<float>(pen_x + glyph_w) / static_cast<float>(atlas_w);
+        glyph.v1 = static_cast<float>(pen_y + glyph_h) / static_cast<float>(atlas_h);
+
+        font.glyphs[ch] = glyph;
+
+        pen_x += glyph_w + margin;
+    }
+
+    const unsigned char* src = static_cast<const unsigned char*>(dib_bits);
+    std::vector<unsigned char> rgba(atlas_w * atlas_h * 4, 0);
+
+    for (int i = 0; i < atlas_w * atlas_h; ++i)
+    {
+        const unsigned char b = src[4 * i + 0];
+        const unsigned char g = src[4 * i + 1];
+        const unsigned char r = src[4 * i + 2];
+        const unsigned char alpha = std::max(r, std::max(g, b));
+
+        rgba[4 * i + 0] = 255;
+        rgba[4 * i + 1] = 255;
+        rgba[4 * i + 2] = 255;
+        rgba[4 * i + 3] = alpha;
+    }
+
+    glGenTextures(1, &font.texture);
+    glBindTexture(GL_TEXTURE_2D, font.texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA8,
+        atlas_w,
+        atlas_h,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        rgba.data()
+    );
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glGenVertexArrays(1, &font.vao);
+    glGenBuffers(1, &font.vbo);
+
+    glBindVertexArray(font.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, font.vbo);
+    glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(TextVertex), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(TextVertex), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(TextVertex), (void*)(4 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    SelectObject(memory_dc, old_font);
+    DeleteObject(hfont);
+    SelectObject(memory_dc, old_bitmap);
+    DeleteObject(bitmap);
+    DeleteDC(memory_dc);
+    ReleaseDC(nullptr, screen_dc);
+
+    return font;
+}
+#else
+static FontAtlasGL createWindowsFontAtlasGL(const char*, int)
+{
+    throw std::runtime_error("ANSYS-style system font atlas is implemented only for Windows in this patch");
+}
+#endif
+
+static void uploadTextVertices(FontAtlasGL& font, const std::vector<TextVertex>& vertices)
+{
+    glBindBuffer(GL_ARRAY_BUFFER, font.vbo);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        static_cast<GLsizeiptr>(vertices.size() * sizeof(TextVertex)),
+        vertices.empty() ? nullptr : vertices.data(),
+        GL_DYNAMIC_DRAW
+    );
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    font.vertex_count = static_cast<GLsizei>(vertices.size());
+}
+
+static void drawTextGL(const FontAtlasGL& font)
+{
+    if (font.vertex_count <= 0)
+    {
+        return;
+    }
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, font.texture);
+    glBindVertexArray(font.vao);
+    glDrawArrays(GL_TRIANGLES, 0, font.vertex_count);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+std::vector<Eigen::Vector2d> makeDisplacedVertices(
+    const QuadMesh& mesh,
+    const XFemIterationResult& result,
+    double scale
+)
+{
+    std::vector<Eigen::Vector2d> vertices_displaced = mesh.vertices;
+
+    for (int n = 0; n < static_cast<int>(mesh.vertices.size()); ++n)
+    {
+        const int off = static_cast<int>(result.node_offset[n]);
+
+        vertices_displaced[n] +=
+            scale * Eigen::Vector2d{result.u(off), result.u(off + 1)};
+    }
+
+    return vertices_displaced;
+}
+
+std::vector<Vertex> makeCrackLineVertices(
+    const Crack& crack,
+    const glm::vec4& color
+)
+{
+    std::vector<Vertex> vertices;
+
+    if (crack.indices.empty())
+    {
+        return vertices;
+    }
+
+    const uint32_t packed_color = packColor(color);
+
+    const int first_id = crack.indices.front().v0;
+    vertices.push_back(
+        Vertex{
+            glm::vec2{
+                static_cast<float>(crack.vertices[first_id].x()),
+                static_cast<float>(crack.vertices[first_id].y())
+            },
+            packed_color
+        }
+    );
+
+    for (const CrackSegment& seg : crack.indices)
+    {
+        const Eigen::Vector2d& p = crack.vertices[seg.v1];
+
+        vertices.push_back(
+            Vertex{
+                glm::vec2{
+                    static_cast<float>(p.x()),
+                    static_cast<float>(p.y())
+                },
+                packed_color
+            }
+        );
+    }
+
+    return vertices;
+}
+
+
+LinearQuad::ShapeData makeQuadShape(double xi, double eta)
+{
+    LinearQuad::ShapeData shape;
+
+    shape.N[0] = 0.25 * (1.0 - xi) * (1.0 - eta);
+    shape.N[1] = 0.25 * (1.0 + xi) * (1.0 - eta);
+    shape.N[2] = 0.25 * (1.0 + xi) * (1.0 + eta);
+    shape.N[3] = 0.25 * (1.0 - xi) * (1.0 + eta);
+
+    shape.dN_xi_eta(0, 0) = -0.25 * (1.0 - eta);
+    shape.dN_xi_eta(1, 0) = -0.25 * (1.0 - xi);
+
+    shape.dN_xi_eta(0, 1) = 0.25 * (1.0 - eta);
+    shape.dN_xi_eta(1, 1) = -0.25 * (1.0 + xi);
+
+    shape.dN_xi_eta(0, 2) = 0.25 * (1.0 + eta);
+    shape.dN_xi_eta(1, 2) = 0.25 * (1.0 + xi);
+
+    shape.dN_xi_eta(0, 3) = -0.25 * (1.0 + eta);
+    shape.dN_xi_eta(1, 3) = 0.25 * (1.0 - xi);
+
+    return shape;
+}
+
+double vonMisesPlaneStress(const Eigen::Vector3d& stress)
+{
+    const double sx = stress(0);
+    const double sy = stress(1);
+    const double txy = stress(2);
+
+    return std::sqrt(
+        sx * sx - sx * sy + sy * sy + 3.0 * txy * txy
+    );
+}
+
+glm::vec4 vonMisesColor(double value, double vmin, double vmax)
+{
+    double t = 0.0;
+
+    if (vmax > vmin)
+    {
+        t = (value - vmin) / (vmax - vmin);
+    }
+
+    t = std::clamp(t, 0.0, 1.0);
+
+    return RainbowColormap::getColorRGBA(
+        static_cast<float>(t),
+        0.88f
+    );
+}
+
+struct TipContext
+{
+    bool valid = false;
+    Eigen::Vector2d tip_point = Eigen::Vector2d::Zero();
+    Eigen::Vector2d t_vec = Eigen::Vector2d::UnitX();
+    Eigen::Vector2d n_vec = Eigen::Vector2d::UnitY();
+    std::array<std::array<double, 4>, 4> f_nodes{};
+};
+
+TipContext makeTipContext(
+    const TipEnriched& tip_data,
+    const std::array<int, 4>& element,
+    const QuadMesh& mesh,
+    const XFemIterationResult& result
+)
+{
+    TipContext ctx;
+    ctx.valid = true;
+
+    Eigen::Matrix<double, 4, 2> coords;
+
+    for (int n = 0; n < 4; ++n)
+    {
+        const Eigen::Vector2d& p = mesh.vertices[element[n]];
+        coords(n, 0) = p.x();
+        coords(n, 1) = p.y();
+    }
+
+    const LinearQuad::ShapeData tip_shape =
+        makeQuadShape(
+            tip_data.tip_point_local_coords.x(),
+            tip_data.tip_point_local_coords.y()
+        );
+
+    ctx.tip_point.setZero();
+
+    for (int n = 0; n < 4; ++n)
+    {
+        ctx.tip_point +=
+            tip_shape.N[n] * coords.row(n).transpose();
+    }
+
+    if (tip_data.tip_index == 1)
+    {
+        ctx.t_vec = result.crack_tip_1_t.normalized();
+        ctx.n_vec = result.crack_tip_1_n.normalized();
+    }
+    else
+    {
+        ctx.t_vec = result.crack_tip_2_t.normalized();
+        ctx.n_vec = result.crack_tip_2_n.normalized();
+    }
+
+    for (int n = 0; n < 4; ++n)
+    {
+        const Eigen::Vector2d d =
+            coords.row(n).transpose() - ctx.tip_point;
+
+        const double x1 = d.dot(ctx.t_vec);
+        const double x2 = d.dot(ctx.n_vec);
+        const double r = std::sqrt(x1 * x1 + x2 * x2);
+
+        if (r < 1e-30)
+        {
+            ctx.f_nodes[n] = {0.0, 0.0, 0.0, 0.0};
+            continue;
+        }
+
+        const double theta = std::atan2(x2, x1);
+        const double sqrt_r = std::sqrt(r);
+        const double sin_half = std::sin(theta / 2.0);
+        const double cos_half = std::cos(theta / 2.0);
+        const double sin_theta = std::sin(theta);
+
+        ctx.f_nodes[n] = {
+            sqrt_r * sin_half,
+            sqrt_r * cos_half,
+            sqrt_r * sin_theta * sin_half,
+            sqrt_r * sin_theta * cos_half
+        };
+    }
+
+    return ctx;
+}
+
+struct FieldEvalResult
+{
+    Eigen::Vector2d x_deformed = Eigen::Vector2d::Zero();
+    Eigen::Vector3d stress = Eigen::Vector3d::Zero();
+    double von_mises = 0.0;
+};
+
+FieldEvalResult evaluateVonMisesPoint(
+    const std::array<int, 4>& element,
+    const QuadMesh& mesh,
+    const XFemIterationResult& result,
+    const Eigen::Matrix3d& D,
+    double scale,
+    double xi,
+    double eta,
+    int forced_H_value,
+    bool use_heaviside,
+    bool use_tip,
+    const TipContext* tip_ctx
+)
+{
+    FieldEvalResult out;
+
+    Eigen::Matrix<double, 4, 2> coords;
+
+    for (int n = 0; n < 4; ++n)
+    {
+        const Eigen::Vector2d& p = mesh.vertices[element[n]];
+        coords(n, 0) = p.x();
+        coords(n, 1) = p.y();
+    }
+
+    const LinearQuad::ShapeData shape =
+        makeQuadShape(xi, eta);
+
+    LinearTriangle::JacobianData jd;
+    jd.J = shape.dN_xi_eta * coords;
+
+    bool invertible = false;
+    jd.J.computeInverseAndDetWithCheck(
+        jd.invJ,
+        jd.detJ,
+        invertible,
+        1e-12
+    );
+
+    if (!invertible)
+    {
+        throw std::runtime_error(
+            "evaluateVonMisesPoint: Jacobi matrix is not invertible"
+        );
+    }
+
+    const Eigen::Matrix<double, 2, 4> dN_dx_dy =
+        jd.invJ * shape.dN_xi_eta;
+
+    Eigen::Vector2d x_global = Eigen::Vector2d::Zero();
+
+    for (int n = 0; n < 4; ++n)
+    {
+        x_global += shape.N[n] * coords.row(n).transpose();
+    }
+
+    Eigen::Vector2d u_global = Eigen::Vector2d::Zero();
+    Eigen::Matrix2d grad_u = Eigen::Matrix2d::Zero();
+
+    for (int n = 0; n < 4; ++n)
+    {
+        const int node = element[n];
+        const int off = static_cast<int>(result.node_offset[node]);
+
+        const double Nn = shape.N[n];
+        const double dNdx = dN_dx_dy(0, n);
+        const double dNdy = dN_dx_dy(1, n);
+
+        const double ux = result.u(off);
+        const double uy = result.u(off + 1);
+
+        u_global += Nn * Eigen::Vector2d{ux, uy};
+
+        grad_u(0, 0) += dNdx * ux;
+        grad_u(0, 1) += dNdy * ux;
+        grad_u(1, 0) += dNdx * uy;
+        grad_u(1, 1) += dNdy * uy;
+
+        if (use_heaviside &&
+            node < static_cast<int>(result.enriched_elements.heaviside_enriched_nodes.size()) &&
+            result.enriched_elements.heaviside_enriched_nodes[node])
+        {
+            const int H_i =
+                result.level_set_fields.vertices_level_set_signs[node].sign;
+
+            const double H_shift =
+                static_cast<double>(forced_H_value - H_i);
+
+            const double ax = result.u(off + 2);
+            const double ay = result.u(off + 3);
+
+            u_global +=
+                Nn * H_shift * Eigen::Vector2d{ax, ay};
+
+            grad_u(0, 0) += dNdx * H_shift * ax;
+            grad_u(0, 1) += dNdy * H_shift * ax;
+            grad_u(1, 0) += dNdx * H_shift * ay;
+            grad_u(1, 1) += dNdy * H_shift * ay;
+        }
+    }
+
+    if (use_tip && tip_ctx != nullptr && tip_ctx->valid)
+    {
+        const Eigen::Vector2d d =
+            x_global - tip_ctx->tip_point;
+
+        const double x1 = d.dot(tip_ctx->t_vec);
+        const double x2 = d.dot(tip_ctx->n_vec);
+
+        const double r2 = x1 * x1 + x2 * x2;
+        const double r = std::sqrt(r2);
+
+        if (r > 1e-14)
+        {
+            const double theta = std::atan2(x2, x1);
+            const double sqrt_r = std::sqrt(r);
+            const double inv_sqrt_r = 1.0 / sqrt_r;
+
+            const double sin_half = std::sin(theta / 2.0);
+            const double cos_half = std::cos(theta / 2.0);
+            const double sin_theta = std::sin(theta);
+            const double cos_theta = std::cos(theta);
+
+            std::array<double, 4> f = {
+                sqrt_r * sin_half,
+                sqrt_r * cos_half,
+                sqrt_r * sin_theta * sin_half,
+                sqrt_r * sin_theta * cos_half
+            };
+
+            std::array<double, 4> df_dr;
+            std::array<double, 4> df_dtheta;
+
+            df_dr[0] = 0.5 * inv_sqrt_r * sin_half;
+            df_dr[1] = 0.5 * inv_sqrt_r * cos_half;
+            df_dr[2] = 0.5 * inv_sqrt_r * sin_half * sin_theta;
+            df_dr[3] = 0.5 * inv_sqrt_r * cos_half * sin_theta;
+
+            df_dtheta[0] = sqrt_r * 0.5 * cos_half;
+            df_dtheta[1] = -sqrt_r * 0.5 * sin_half;
+            df_dtheta[2] =
+                sqrt_r *
+                (0.5 * cos_half * sin_theta +
+                 sin_half * cos_theta);
+            df_dtheta[3] =
+                sqrt_r *
+                (-0.5 * sin_half * sin_theta +
+                 cos_half * cos_theta);
+
+            const double drdx = d.x() / r;
+            const double drdy = d.y() / r;
+
+            const double dtheta_dx =
+                (x1 * tip_ctx->n_vec.x() -
+                 x2 * tip_ctx->t_vec.x()) / r2;
+
+            const double dtheta_dy =
+                (x1 * tip_ctx->n_vec.y() -
+                 x2 * tip_ctx->t_vec.y()) / r2;
+
+            std::array<Eigen::Vector2d, 4> df_dx;
+
+            for (int a = 0; a < 4; ++a)
+            {
+                df_dx[a].x() =
+                    df_dr[a] * drdx +
+                    df_dtheta[a] * dtheta_dx;
+
+                df_dx[a].y() =
+                    df_dr[a] * drdy +
+                    df_dtheta[a] * dtheta_dy;
+            }
+
+            for (int n = 0; n < 4; ++n)
+            {
+                const int node = element[n];
+
+                if (node >= static_cast<int>(result.enriched_elements.tip_enriched_nodes.size()) ||
+                    !result.enriched_elements.tip_enriched_nodes[node])
+                {
+                    continue;
+                }
+
+                const int off = static_cast<int>(result.node_offset[node]);
+                const double Nn = shape.N[n];
+                const double dNdx = dN_dx_dy(0, n);
+                const double dNdy = dN_dx_dy(1, n);
+
+                for (int a = 0; a < 4; ++a)
+                {
+                    const double bx = result.u(off + 4 + 2 * a);
+                    const double by = result.u(off + 4 + 2 * a + 1);
+
+                    const double shift =
+                        f[a] - tip_ctx->f_nodes[n][a];
+
+                    const double d_enr_dx =
+                        dNdx * shift + Nn * df_dx[a].x();
+
+                    const double d_enr_dy =
+                        dNdy * shift + Nn * df_dx[a].y();
+
+                    u_global +=
+                        Nn * shift * Eigen::Vector2d{bx, by};
+
+                    grad_u(0, 0) += d_enr_dx * bx;
+                    grad_u(0, 1) += d_enr_dy * bx;
+                    grad_u(1, 0) += d_enr_dx * by;
+                    grad_u(1, 1) += d_enr_dy * by;
+                }
+            }
+        }
+    }
+
+    Eigen::Vector3d strain;
+    strain << grad_u(0, 0),
+              grad_u(1, 1),
+              grad_u(0, 1) + grad_u(1, 0);
+
+    out.stress = D * strain;
+    out.von_mises = vonMisesPlaneStress(out.stress);
+    out.x_deformed = x_global + scale * u_global;
+
+    return out;
+}
+
+void addVonMisesTriangle(
+    std::vector<StressTriangleValue>& output,
+    const std::array<int, 4>& element,
+    const QuadMesh& mesh,
+    const XFemIterationResult& result,
+    const Eigen::Matrix3d& D,
+    double scale,
+    const std::array<Eigen::Vector2d, 3>& local_tri,
+    int forced_H_value,
+    bool use_heaviside,
+    bool use_tip,
+    const TipContext* tip_ctx
+)
+{
+    const double xi_c =
+        (local_tri[0].x() + local_tri[1].x() + local_tri[2].x()) / 3.0;
+
+    const double eta_c =
+        (local_tri[0].y() + local_tri[1].y() + local_tri[2].y()) / 3.0;
+
+    const FieldEvalResult c =
+        evaluateVonMisesPoint(
+            element,
+            mesh,
+            result,
+            D,
+            scale,
+            xi_c,
+            eta_c,
+            forced_H_value,
+            use_heaviside,
+            use_tip,
+            tip_ctx
+        );
+
+    const FieldEvalResult v0 =
+        evaluateVonMisesPoint(
+            element,
+            mesh,
+            result,
+            D,
+            scale,
+            local_tri[0].x(),
+            local_tri[0].y(),
+            forced_H_value,
+            use_heaviside,
+            use_tip,
+            tip_ctx
+        );
+
+    const FieldEvalResult v1 =
+        evaluateVonMisesPoint(
+            element,
+            mesh,
+            result,
+            D,
+            scale,
+            local_tri[1].x(),
+            local_tri[1].y(),
+            forced_H_value,
+            use_heaviside,
+            use_tip,
+            tip_ctx
+        );
+
+    const FieldEvalResult v2 =
+        evaluateVonMisesPoint(
+            element,
+            mesh,
+            result,
+            D,
+            scale,
+            local_tri[2].x(),
+            local_tri[2].y(),
+            forced_H_value,
+            use_heaviside,
+            use_tip,
+            tip_ctx
+        );
+
+    StressTriangleValue tri;
+    tri.p0 = v0.x_deformed;
+    tri.p1 = v1.x_deformed;
+    tri.p2 = v2.x_deformed;
+    tri.value = c.von_mises;
+
+    output.push_back(tri);
+}
+
+std::vector<StressTriangleValue> buildVonMisesTriangles(
+    const GrowthFrame& frame,
+    const QuadMesh& mesh,
+    const Eigen::Matrix3d& D,
+    double scale
+)
+{
+    std::vector<StressTriangleValue> triangles;
+
+    const XFemIterationResult& result = frame.solve_result;
+
+    std::vector<int> tip_element_to_index(
+        mesh.elements.size(),
+        -1
+    );
+
+    for (int i = 0; i < static_cast<int>(result.enriched_elements.tip_enriched.size()); ++i)
+    {
+        tip_element_to_index[result.enriched_elements.tip_enriched[i].id] = i;
+    }
+
+    std::vector<int> heaviside_element_to_index(
+        mesh.elements.size(),
+        -1
+    );
+
+    for (int i = 0; i < static_cast<int>(result.enriched_elements.heaviside_enriched.size()); ++i)
+    {
+        heaviside_element_to_index[result.enriched_elements.heaviside_enriched[i].id] = i;
+    }
+
+    for (int elem_id = 0; elem_id < static_cast<int>(mesh.elements.size()); ++elem_id)
+    {
+        const std::array<int, 4>& element = mesh.elements[elem_id];
+        const int tip_index = tip_element_to_index[elem_id];
+        const int h_index = heaviside_element_to_index[elem_id];
+
+        if (tip_index >= 0)
+        {
+            const TipEnriched& tip_data =
+                result.enriched_elements.tip_enriched[tip_index];
+
+            const TipTriangulation& triangulation =
+                result.enriched_elements_triangulation.tip_enriched_triangulation[tip_index];
+
+            const TipContext tip_ctx =
+                makeTipContext(
+                    tip_data,
+                    element,
+                    mesh,
+                    result
+                );
+
+            const std::array<Eigen::Vector2d, 6> local_points = {
+                Eigen::Vector2d{-1.0, -1.0},
+                Eigen::Vector2d{ 1.0, -1.0},
+                Eigen::Vector2d{ 1.0,  1.0},
+                Eigen::Vector2d{-1.0,  1.0},
+                tip_data.intersection_point_local_coords,
+                tip_data.tip_point_local_coords
+            };
+
+            for (unsigned int tri_id = 0; tri_id < 5; ++tri_id)
+            {
+                const std::array<unsigned char, 3>& tri =
+                    triangulation.tri_indices[tri_id];
+
+                const std::array<Eigen::Vector2d, 3> local_tri = {
+                    local_points[tri[0]],
+                    local_points[tri[1]],
+                    local_points[tri[2]]
+                };
+
+                addVonMisesTriangle(
+                    triangles,
+                    element,
+                    mesh,
+                    result,
+                    D,
+                    scale,
+                    local_tri,
+                    0,
+                    false,
+                    true,
+                    &tip_ctx
+                );
+            }
+        }
+        else if (h_index >= 0)
+        {
+            const HeavisideEnriched& h_data =
+                result.enriched_elements.heaviside_enriched[h_index];
+
+            const HeavisideTriangulation& triangulation =
+                result.enriched_elements_triangulation.heaviside_enriched_triangulation[h_index];
+
+            const std::array<Eigen::Vector2d, 6> local_points = {
+                Eigen::Vector2d{-1.0, -1.0},
+                Eigen::Vector2d{ 1.0, -1.0},
+                Eigen::Vector2d{ 1.0,  1.0},
+                Eigen::Vector2d{-1.0,  1.0},
+                h_data.intersection_points_local_coords[0],
+                h_data.intersection_points_local_coords[1]
+            };
+
+            for (unsigned int tri_id = 0; tri_id < triangulation.triangles_num; ++tri_id)
+            {
+                const std::array<unsigned char, 3>& tri =
+                    triangulation.tri_indices[tri_id];
+
+                const std::array<Eigen::Vector2d, 3> local_tri = {
+                    local_points[tri[0]],
+                    local_points[tri[1]],
+                    local_points[tri[2]]
+                };
+
+                const int H_value =
+                    tri_id < triangulation.positive_heaviside_triangles_num
+                        ? +1
+                        : -1;
+
+                addVonMisesTriangle(
+                    triangles,
+                    element,
+                    mesh,
+                    result,
+                    D,
+                    scale,
+                    local_tri,
+                    H_value,
+                    true,
+                    false,
+                    nullptr
+                );
+            }
+        }
+        else
+        {
+            const std::array<Eigen::Vector2d, 3> tri_1 = {
+                Eigen::Vector2d{-1.0, -1.0},
+                Eigen::Vector2d{ 1.0, -1.0},
+                Eigen::Vector2d{ 1.0,  1.0}
+            };
+
+            const std::array<Eigen::Vector2d, 3> tri_2 = {
+                Eigen::Vector2d{-1.0, -1.0},
+                Eigen::Vector2d{ 1.0,  1.0},
+                Eigen::Vector2d{-1.0,  1.0}
+            };
+
+            addVonMisesTriangle(
+                triangles,
+                element,
+                mesh,
+                result,
+                D,
+                scale,
+                tri_1,
+                0,
+                false,
+                false,
+                nullptr
+            );
+
+            addVonMisesTriangle(
+                triangles,
+                element,
+                mesh,
+                result,
+                D,
+                scale,
+                tri_2,
+                0,
+                false,
+                false,
+                nullptr
+            );
+        }
+    }
+
+    return triangles;
+}
+
+VonMisesScale applyVonMisesColors(
+    std::vector<GrowthFrameVisual>& visuals
+)
+{
+    std::vector<double> all_values;
+
+    for (const GrowthFrameVisual& visual : visuals)
+    {
+        for (const StressTriangleValue& tri : visual.von_mises_triangles)
+        {
+            if (std::isfinite(tri.value))
+            {
+                all_values.push_back(tri.value);
+            }
+        }
+    }
+
+    if (all_values.empty())
+    {
+        return VonMisesScale{};
+    }
+
+    std::sort(all_values.begin(), all_values.end());
+
+    const std::size_t low_index =
+        static_cast<std::size_t>(0.02 * static_cast<double>(all_values.size() - 1));
+
+    const std::size_t high_index =
+        static_cast<std::size_t>(0.98 * static_cast<double>(all_values.size() - 1));
+
+    double vmin = all_values[low_index];
+    double vmax = all_values[high_index];
+
+    if (!(vmax > vmin))
+    {
+        vmin = all_values.front();
+        vmax = all_values.back();
+    }
+
+    if (!(vmax > vmin))
+    {
+        vmax = vmin + 1.0;
+    }
+
+    std::cout << "Global von Mises color range, clipped 2%..98%: "
+              << vmin << " ... " << vmax << std::endl;
+
+    for (GrowthFrameVisual& visual : visuals)
+    {
+        visual.von_mises_vertices.clear();
+        visual.von_mises_vertices.reserve(
+            visual.von_mises_triangles.size() * 3
+        );
+
+        for (const StressTriangleValue& tri : visual.von_mises_triangles)
+        {
+            const uint32_t packed_color =
+                packColor(vonMisesColor(tri.value, vmin, vmax));
+
+            visual.von_mises_vertices.push_back(
+                Vertex{
+                    toGlm(tri.p0.cast<float>().eval()),
+                    packed_color
+                }
+            );
+
+            visual.von_mises_vertices.push_back(
+                Vertex{
+                    toGlm(tri.p1.cast<float>().eval()),
+                    packed_color
+                }
+            );
+
+            visual.von_mises_vertices.push_back(
+                Vertex{
+                    toGlm(tri.p2.cast<float>().eval()),
+                    packed_color
+                }
+            );
+        }
+    }
+
+    return VonMisesScale{vmin, vmax};
+}
+
+GrowthFrameVisual makeGrowthFrameVisual(
+    const GrowthFrame& frame,
+    const QuadMesh& mesh,
+    const Eigen::Matrix3d& D,
+    double scale
+)
+{
+    GrowthFrameVisual visual;
+
+    const std::vector<Eigen::Vector2d> vertices_displaced =
+        makeDisplacedVertices(
+            mesh,
+            frame.solve_result,
+            scale
+        );
+
+    visual.circles.reserve(mesh.vertices.size());
+
+    for (int idx = 0; idx < static_cast<int>(mesh.vertices.size()); ++idx)
+    {
+        visual.circles.push_back(
+            Circle{
+                glm::vec3{
+                    toGlm(vertices_displaced[idx].cast<float>().eval()),
+                    1.0f / static_cast<float>(SCR_WIDTH)
+                },
+                glm::vec4{0.0f, 1.0f, 0.0f, 1.0f}
+            }
+        );
+    }
+
+    visual.crack_vertices =
+        makeCrackLineVertices(
+            frame.crack,
+            glm::vec4(0.0f, 1.0f, 1.0f, 1.0f)
+        );
+
+    visual.von_mises_triangles =
+        buildVonMisesTriangles(
+            frame,
+            mesh,
+            D,
+            scale
+        );
+
+    return visual;
+}
+
+void uploadGrowthFrameVisual(
+    const GrowthFrameVisual& visual,
+    GLuint quadVBO,
+    GLuint circleVBO,
+    GLuint chainVBO,
+    GLuint vonMisesVBO
+)
+{
+    glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        visual.quads.size() * sizeof(Quad),
+        visual.quads.empty() ? nullptr : visual.quads.data(),
+        GL_DYNAMIC_DRAW
+    );
+
+    glBindBuffer(GL_ARRAY_BUFFER, circleVBO);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        visual.circles.size() * sizeof(Circle),
+        visual.circles.empty() ? nullptr : visual.circles.data(),
+        GL_DYNAMIC_DRAW
+    );
+
+    glBindBuffer(GL_ARRAY_BUFFER, chainVBO);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        visual.crack_vertices.size() * sizeof(Vertex),
+        visual.crack_vertices.empty() ? nullptr : visual.crack_vertices.data(),
+        GL_DYNAMIC_DRAW
+    );
+
+    glBindBuffer(GL_ARRAY_BUFFER, vonMisesVBO);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        visual.von_mises_vertices.size() * sizeof(Vertex),
+        visual.von_mises_vertices.empty() ? nullptr : visual.von_mises_vertices.data(),
+        GL_DYNAMIC_DRAW
+    );
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+bool keyPressedOnce(
+    GLFWwindow* window,
+    int key,
+    std::unordered_set<int>& pressed_keys
+)
+{
+    const int state = glfwGetKey(window, key);
+
+    if (state == GLFW_PRESS)
+    {
+        if (!pressed_keys.contains(key))
+        {
+            pressed_keys.insert(key);
+            return true;
+        }
+    }
+    else
+    {
+        pressed_keys.erase(key);
+    }
+
+    return false;
+}
+
 int main()
 {
     std::cout << "CPU has AVX2: " << hasAVX2() << std::endl;
@@ -414,738 +1957,229 @@ int main()
     {
         disable_debug_output_data >> disable_debug_output;
     }
-    Eigen::Vector2d first_crack_segment = (crack.vertices[crack.indices[0].v0] - crack.vertices[crack.indices[0].v1]);
-    Eigen::Vector2d crack_tip_1_t = first_crack_segment.normalized();
-    Eigen::Vector2d crack_tip_1_n = Eigen::Vector2d{-crack_tip_1_t.y(), crack_tip_1_t.x()};
-
-    Eigen::Vector2d last_crack_segment = (crack.vertices[crack.indices[crack.indices.size() - 1].v1] -
-                                          crack.vertices[crack.indices[crack.indices.size() - 1].v0]);
-    Eigen::Vector2d crack_tip_2_t = last_crack_segment.normalized();
-    Eigen::Vector2d crack_tip_2_n = Eigen::Vector2d{-crack_tip_2_t.y(), crack_tip_2_t.x()};
-    const double E = 2 * std::pow(10, 11);
-    constexpr double nu = 0.3;
+    const double E = 70e9;        // Pa
+    constexpr double nu = 0.23;   // -
+    const double KIC = 0.75e6;    // Pa * sqrt(m)
     const Eigen::Matrix3d D = setup_D_matrix(E, nu, true);
 
-    LevelSetFields level_set_fields = compute_level_set_fields(mesh, crack);
-    EnrichedElements enriched_elements =
-        find_enriched_elements_by_level_set_fields_simple(mesh, crack, level_set_fields);
+    const int max_growth_steps = 100;
+    std::vector<GrowthFrame> growth_frames;
+    growth_frames.reserve(max_growth_steps);
 
-    EnrichedElementsTriangulation enriched_elements_triangulation =
-        triangulate_enriched(mesh, enriched_elements, level_set_fields);
+    const double da = 1.0 * std::min(wh, hh);
 
-    std::vector<unsigned int> node_offset(total_vertices);
-    std::vector<unsigned int> node_ndof(total_vertices);
-    unsigned int dof_counter = 0;
-    for (unsigned int n = 0; n < total_vertices; ++n)
+    XFemIterationResult solve_result;
+
+    for (int growth_step = 0; growth_step < max_growth_steps; ++growth_step)
     {
-        node_offset[n] = dof_counter;
-        node_ndof[n] = 12; // always two standard DOFs
-        dof_counter += node_ndof[n];
-    }
-    std::vector<bool> active(dof_counter);
-    // After node_offset and node_ndof are ready:
-    size_t total_triplets = 0;
-    for (const int element_id : enriched_elements.regular)
-    {
-        int n_local = 0;
-        for (int i = 0; i < 4; ++i)
-        { // assuming 4 nodes per element
-            int node = mesh.elements[element_id][i];
-            n_local += node_ndof[node];
-        }
-        total_triplets += n_local * (n_local + 1) / 2;
-    }
-    std::vector<Eigen::Triplet<double>> triplets;
-    std::cout << "Not enriched " << enriched_elements.regular.size()
-              << " Heaviside: " << enriched_elements.heaviside_enriched.size()
-              << " Tip enriched: " << enriched_elements.tip_enriched.size() << std::endl;
-    std::cout << "Assembling matrix of size: " << dof_counter << std::endl;
-    std::cout << "Triplets count: " << total_triplets << std::endl;
+        std::cout << "\n==============================\n";
+        std::cout << "CRACK GROWTH ITERATION " << growth_step << "\n";
+        std::cout << "==============================\n";
 
-    // 8-point Gauss-Legendre on [0, 1]
-    // Можно заменить на 4 точки, но для tip singularity 8x8 устойчивее.
-    constexpr int DuffyN = 8;
+        solve_result =
+            solveCrackIteration(
+                mesh,
+                crack,
+                w,
+                h,
+                wn,
+                hn,
+                thickness,
+                D,
+                disable_output,
+                disable_debug_output
+            );
 
-    const std::array<double, DuffyN> duffy_pts = {0.0198550717512319, 0.101666761293187, 0.237233795041836,
-                                                  0.408282678752175,  0.591717321247825, 0.762766204958164,
-                                                  0.898333238706813,  0.980144928248768};
+        std::vector<TipKResult> k_results =
+            computeStress<13>(
+                solve_result.enriched_elements.tip_enriched,
+                solve_result.enriched_elements.heaviside_enriched,
+                mesh,
+                solve_result.enriched_elements_triangulation.tip_enriched_triangulation,
+                solve_result.enriched_elements_triangulation.heaviside_enriched_triangulation,
+                solve_result.u,
+                solve_result.node_offset,
+                solve_result.enriched_elements.heaviside_enriched_nodes,
+                solve_result.enriched_elements.tip_enriched_nodes,
+                solve_result.level_set_fields.vertices_level_set_signs,
+                LinearTriangle::Triangle13PointRule::gauss_pts,
+                LinearTriangle::Triangle13PointRule::gauss_wts,
+                solve_result.crack_tip_1_t,
+                solve_result.crack_tip_1_n,
+                solve_result.crack_tip_2_t,
+                solve_result.crack_tip_2_n,
+                D,
+                E,
+                nu,
+                Rin,
+                Rout
+            );
 
-    const std::array<double, DuffyN> duffy_wts = {0.0506142681451881, 0.111190517226687, 0.156853322938944,
-                                                  0.181341891689181,  0.181341891689181, 0.156853322938944,
-                                                  0.111190517226687,  0.0506142681451881};
+        growth_frames.push_back(
+            GrowthFrame{
+                crack,
+                solve_result,
+                k_results
+            }
+        );
 
-    auto det2 = [](const Eigen::Vector2d &a, const Eigen::Vector2d &b) { return a.x() * b.y() - a.y() * b.x(); };
-
-    // tip elements
-    // TODO: Not forget to rotate, because crack is rotated atan is incorrect!!!.
-    for (int i = 0; i < enriched_elements.tip_enriched.size(); i++)
-    {
-        const auto &enriched_element = enriched_elements.tip_enriched[i];
-        const std::array<int, 4> &element = mesh.elements[enriched_element.id];
-        const TipTriangulation &triangulation = enriched_elements_triangulation.tip_enriched_triangulation[i];
-        // u_x u_y f1_x f1_y f2_x f2_y f3_x f3_y f4_x f4_y . total 10 dof per node
-        // 4 nodes. total 40 dofs per element
-        Eigen::Matrix<double, 40, 40> Ke;
-
-        Ke.setZero();
-        std::array<Eigen::Vector2d, 4> points = {
-            mesh.vertices[element[0]],
-            mesh.vertices[element[1]],
-            mesh.vertices[element[2]],
-            mesh.vertices[element[3]],
-        };
-        std::array<Eigen::Vector2d, 6> local_points = {Eigen::Vector2d{-1, -1},
-                                                       Eigen::Vector2d{1, -1},
-                                                       Eigen::Vector2d{1, 1},
-                                                       Eigen::Vector2d{-1, 1},
-                                                       enriched_element.intersection_point_local_coords,
-                                                       enriched_element.tip_point_local_coords};
-        const Eigen::Matrix<double, 4, 2> coords{{{points[0].x(), points[0].y()},
-                                                  {points[1].x(), points[1].y()},
-                                                  {points[2].x(), points[2].y()},
-                                                  {points[3].x(), points[3].y()}}};
-
-        std::array<std::array<double, 4>, 4> f_nodes;
-        Eigen::Vector2d d;
-        double radius, radius2, theta, sqrt_r, sinhalftheta, sintheta, coshalftheta, costheta;
-        for (int n = 0; n < 4; n++)
+        if (k_results.empty())
         {
-            Eigen::Vector2d tip_point_global_coords = Eigen::Vector2d::Zero();
-            double xi_tip = enriched_element.tip_point_local_coords.x();
-            double eta_tip = enriched_element.tip_point_local_coords.y();
-            std::array<double, 4> N_tip;
-
-            N_tip[0] = 0.25 * (1 - xi_tip) * (1 - eta_tip);
-            N_tip[1] = 0.25 * (1 + xi_tip) * (1 - eta_tip);
-            N_tip[2] = 0.25 * (1 + xi_tip) * (1 + eta_tip);
-            N_tip[3] = 0.25 * (1 - xi_tip) * (1 + eta_tip);
-            for (int k = 0; k < 4; k++)
-            {
-                tip_point_global_coords += N_tip[k] * coords.row(k);
-            }
-            d = (coords.row(n).transpose() - tip_point_global_coords);
-            radius = d.norm();
-
-            if (enriched_element.tip_index == 1)
-            {
-                theta = std::atan2(d.dot(crack_tip_1_n), d.dot(crack_tip_1_t));
-            }
-            else if (enriched_element.tip_index == 2)
-            {
-                theta = std::atan2(d.dot(crack_tip_2_n), d.dot(crack_tip_2_t));
-            }
-
-            sqrt_r = std::sqrt(radius);
-            sinhalftheta = std::sin(theta / 2);
-            sintheta = std::sin(theta);
-            coshalftheta = std::cos(theta / 2);
-            f_nodes[n] = {sqrt_r * sinhalftheta, sqrt_r * coshalftheta, sqrt_r * sintheta * sinhalftheta,
-                          sqrt_r * sintheta * coshalftheta};
+            std::cout << "No K results. Stop crack growth.\n";
+            break;
         }
-        std::array<double, 4> dfdr, dfdtheta;
-        double drdx, drdy, dthetadx, dthetady;
-        std::array<Eigen::Vector2d, 4> df_dx;
-        double dNdx, dNdy, Nn;
-        double shift;
-        double factor;
-        Eigen::Matrix<double, 3, 40> B;
 
-        for (unsigned int j = 0; j < 5; j++)
+        double max_Keq = 0.0;
+
+        for (const TipKResult& r : k_results)
         {
-            const std::array<unsigned char, 3> &triangle = triangulation.tri_indices[j];
+            const double Keq =
+                computeEquivalentK(r.K_I, r.K_II);
 
-            // ------------------------------------------------------------
-            // Duffy transform должен начинаться из вершины сингулярности.
-            // В твоём local_points tip имеет индекс 5.
-            // ------------------------------------------------------------
-            int tip_pos = -1;
-
-            for (int q = 0; q < 3; ++q)
-            {
-                if (triangle[q] == 5)
-                {
-                    tip_pos = q;
-                    break;
-                }
-            }
-
-            if (tip_pos == -1)
-            {
-                throw std::runtime_error("Duffy transform failed: tip point is not a vertex of tip subtriangle");
-            }
-
-            const int idx_A = triangle[tip_pos];
-            const int idx_B = triangle[(tip_pos + 1) % 3];
-            const int idx_C = triangle[(tip_pos + 2) % 3];
-
-            const Eigen::Vector2d A = local_points[idx_A]; // tip point
-            const Eigen::Vector2d Bp = local_points[idx_B];
-            const Eigen::Vector2d Cp = local_points[idx_C];
-
-            const Eigen::Vector2d AB = Bp - A;
-            const Eigen::Vector2d AC = Cp - A;
-
-            const double det_duffy_triangle = std::abs(det2(AB, AC));
-
-            if (det_duffy_triangle < 1e-14)
-            {
-                throw std::runtime_error("Degenerate Duffy subtriangle");
-            }
-
-            for (int ir = 0; ir < DuffyN; ++ir)
-            {
-                const double rho = duffy_pts[ir];
-                const double wrho = duffy_wts[ir];
-
-                for (int it = 0; it < DuffyN; ++it)
-                {
-                    B.setZero();
-
-                    const double tau = duffy_pts[it];
-                    const double wtau = duffy_wts[it];
-
-                    // ------------------------------------------------------------
-                    // Duffy mapping:
-                    //
-                    // X(rho,tau) = A + rho * ((1-tau)*(B-A) + tau*(C-A))
-                    //
-                    // rho = 0 -> tip point
-                    // rho = 1 -> opposite edge B-C
-                    // ------------------------------------------------------------
-                    const Eigen::Vector2d xi_eta = A + rho * ((1.0 - tau) * AB + tau * AC);
-
-                    const double xi = xi_eta.x();
-                    const double eta = xi_eta.y();
-
-                    LinearQuad::ShapeData shape;
-
-                    // Node 1
-                    shape.N[0] = 0.25 * (1.0 - xi) * (1.0 - eta);
-                    shape.dN_xi_eta(0, 0) = -0.25 * (1.0 - eta);
-                    shape.dN_xi_eta(1, 0) = -0.25 * (1.0 - xi);
-
-                    // Node 2
-                    shape.N[1] = 0.25 * (1.0 + xi) * (1.0 - eta);
-                    shape.dN_xi_eta(0, 1) = 0.25 * (1.0 - eta);
-                    shape.dN_xi_eta(1, 1) = -0.25 * (1.0 + xi);
-
-                    // Node 3
-                    shape.N[2] = 0.25 * (1.0 + xi) * (1.0 + eta);
-                    shape.dN_xi_eta(0, 2) = 0.25 * (1.0 + eta);
-                    shape.dN_xi_eta(1, 2) = 0.25 * (1.0 + xi);
-
-                    // Node 4
-                    shape.N[3] = 0.25 * (1.0 - xi) * (1.0 + eta);
-                    shape.dN_xi_eta(0, 3) = -0.25 * (1.0 + eta);
-                    shape.dN_xi_eta(1, 3) = 0.25 * (1.0 - xi);
-
-                    LinearTriangle::JacobianData jd;
-                    jd.J = shape.dN_xi_eta * coords;
-
-                    bool invertible = false;
-                    jd.J.computeInverseAndDetWithCheck(jd.invJ, jd.detJ, invertible, 1e-12);
-
-                    if (!invertible)
-                    {
-                        throw std::runtime_error("Jacobi matrix is not invertible");
-                    }
-
-                    Eigen::Matrix<double, 2, 4> dN_dx_dy;
-                    dN_dx_dy = jd.invJ * shape.dN_xi_eta;
-
-                    Eigen::Vector2d gauss_point_global_coords = Eigen::Vector2d::Zero();
-
-                    Eigen::Vector2d tip_point_global_coords = Eigen::Vector2d::Zero();
-
-                    double xi_tip = enriched_element.tip_point_local_coords.x();
-                    double eta_tip = enriched_element.tip_point_local_coords.y();
-
-                    std::array<double, 4> N_tip;
-
-                    N_tip[0] = 0.25 * (1.0 - xi_tip) * (1.0 - eta_tip);
-                    N_tip[1] = 0.25 * (1.0 + xi_tip) * (1.0 - eta_tip);
-                    N_tip[2] = 0.25 * (1.0 + xi_tip) * (1.0 + eta_tip);
-                    N_tip[3] = 0.25 * (1.0 - xi_tip) * (1.0 + eta_tip);
-
-                    for (int k = 0; k < 4; ++k)
-                    {
-                        gauss_point_global_coords += shape.N[k] * coords.row(k).transpose();
-
-                        tip_point_global_coords += N_tip[k] * coords.row(k).transpose();
-                    }
-
-                    d = gauss_point_global_coords - tip_point_global_coords;
-
-                    radius2 = d.squaredNorm();
-                    radius = std::sqrt(radius2);
-
-                    if (radius < 1e-14)
-                    {
-                        continue;
-                    }
-
-                    if (enriched_element.tip_index == 1)
-                    {
-                        theta = std::atan2(d.dot(crack_tip_1_n), d.dot(crack_tip_1_t));
-                    }
-                    else if (enriched_element.tip_index == 2)
-                    {
-                        theta = std::atan2(d.dot(crack_tip_2_n), d.dot(crack_tip_2_t));
-                    }
-                    else
-                    {
-                        throw std::runtime_error("Invalid tip_index");
-                    }
-
-                    sqrt_r = std::sqrt(radius);
-                    sinhalftheta = std::sin(theta / 2.0);
-                    sintheta = std::sin(theta);
-                    coshalftheta = std::cos(theta / 2.0);
-                    costheta = std::cos(theta);
-
-                    std::array<double, 4> f = {sqrt_r * sinhalftheta, sqrt_r * coshalftheta,
-                                               sqrt_r * sintheta * sinhalftheta, sqrt_r * sintheta * coshalftheta};
-
-                    dfdr[0] = 0.5 / sqrt_r * sinhalftheta;
-                    dfdr[1] = 0.5 / sqrt_r * coshalftheta;
-                    dfdr[2] = 0.5 / sqrt_r * sinhalftheta * sintheta;
-                    dfdr[3] = 0.5 / sqrt_r * coshalftheta * sintheta;
-
-                    dfdtheta[0] = sqrt_r * 0.5 * coshalftheta;
-                    dfdtheta[1] = -sqrt_r * 0.5 * sinhalftheta;
-                    dfdtheta[2] = sqrt_r * (0.5 * coshalftheta * sintheta + sinhalftheta * costheta);
-
-                    dfdtheta[3] = sqrt_r * (-0.5 * sinhalftheta * sintheta + coshalftheta * costheta);
-
-                    drdx = d.x() / radius;
-                    drdy = d.y() / radius;
-
-                    if (enriched_element.tip_index == 1)
-                    {
-                        const double a = d.dot(crack_tip_1_t);
-                        const double b = d.dot(crack_tip_1_n);
-                        const double r2 = a * a + b * b;
-
-                        if (r2 > 1e-14)
-                        {
-                            dthetadx = (a * crack_tip_1_n.x() - b * crack_tip_1_t.x()) / r2;
-
-                            dthetady = (a * crack_tip_1_n.y() - b * crack_tip_1_t.y()) / r2;
-                        }
-                        else
-                        {
-                            dthetadx = 0.0;
-                            dthetady = 0.0;
-                        }
-                    }
-                    else
-                    {
-                        const double a = d.dot(crack_tip_2_t);
-                        const double b = d.dot(crack_tip_2_n);
-                        const double r2 = a * a + b * b;
-
-                        if (r2 > 1e-14)
-                        {
-                            dthetadx = (a * crack_tip_2_n.x() - b * crack_tip_2_t.x()) / r2;
-
-                            dthetady = (a * crack_tip_2_n.y() - b * crack_tip_2_t.y()) / r2;
-                        }
-                        else
-                        {
-                            dthetadx = 0.0;
-                            dthetady = 0.0;
-                        }
-                    }
-
-                    for (int a = 0; a < 4; ++a)
-                    {
-                        df_dx[a].x() = dfdr[a] * drdx + dfdtheta[a] * dthetadx;
-
-                        df_dx[a].y() = dfdr[a] * drdy + dfdtheta[a] * dthetady;
-                    }
-
-                    for (int n = 0; n < 4; ++n)
-                    {
-                        dNdx = dN_dx_dy(0, n);
-                        dNdy = dN_dx_dy(1, n);
-                        Nn = shape.N[n];
-
-                        // standard DOFs
-                        B(0, 10 * n) = dNdx;
-                        B(0, 10 * n + 1) = 0.0;
-
-                        B(1, 10 * n) = 0.0;
-                        B(1, 10 * n + 1) = dNdy;
-
-                        B(2, 10 * n) = dNdy;
-                        B(2, 10 * n + 1) = dNdx;
-
-                        // tip enrichment DOFs
-                        for (int a = 0; a < 4; ++a)
-                        {
-                            shift = f[a] - f_nodes[n][a];
-
-                            const double d_enr_dx = dNdx * shift + Nn * df_dx[a].x();
-
-                            const double d_enr_dy = dNdy * shift + Nn * df_dx[a].y();
-
-                            // x-component enriched displacement
-                            B(0, 10 * n + 2 + 2 * a) = d_enr_dx;
-                            B(1, 10 * n + 2 + 2 * a) = 0.0;
-                            B(2, 10 * n + 2 + 2 * a) = d_enr_dy;
-
-                            // y-component enriched displacement
-                            B(0, 10 * n + 3 + 2 * a) = 0.0;
-                            B(1, 10 * n + 3 + 2 * a) = d_enr_dy;
-                            B(2, 10 * n + 3 + 2 * a) = d_enr_dx;
-                        }
-                    }
-
-                    // ------------------------------------------------------------
-                    // Duffy weight:
-                    //
-                    // dξdη = rho * |det(B-A, C-A)| dρ dτ
-                    // dxdy = |detJ_quad| dξdη
-                    // ------------------------------------------------------------
-                    factor = wrho * wtau * rho * det_duffy_triangle * std::abs(jd.detJ);
-
-                    Ke += factor * (B.transpose() * D * B) * thickness;
-
-                    area_duffy += factor;
-                }
-            }
+            max_Keq =
+                std::max(max_Keq, Keq);
         }
 
-        Eigen::Matrix<double, 48, 48> Ke_expanded;
-        Ke_expanded.setZero();
-        for (int i = 0; i < 4; ++i)
+
+        const bool grown =
+            growCrackOneStep(
+                crack,
+                k_results,
+                KIC,
+                da,
+                w,
+                h
+            );
+
+        if (!grown)
         {
-            for (int j = 0; j < 4; ++j)
-            {
-                for (int k = 0; k < 10; k++)
-                {
-                    for (int l = 0; l < 10; l++)
-                    {
-                        const int offset_tip = 2;            // skip Heaviside DOFs
-                        // Map local DOF index to global block index
-                        int global_row_dof;
-                        int global_col_dof;
-
-                        if (k < 2)                           // standard DOFs
-                            global_row_dof = k;              // 0,1
-                        else                                 // tip DOFs
-                            global_row_dof = k + offset_tip; // 2->4, 3->5, ..., 9->11
-
-                        if (l < 2)
-                            global_col_dof = l;
-                        else
-                            global_col_dof = l + offset_tip;
-                        Ke_expanded(12 * i + global_row_dof, 12 * j + global_col_dof) = Ke(10 * i + k, 10 * j + l);
-                    }
-                }
-            }
+            std::cout << "Crack growth finished.\n";
+            break;
         }
-        FEMAssemble::addElementSparseUpperStiffness(LinearQuad::Element{element[0], element[1], element[2], element[3]},
-                                                    Ke_expanded, triplets, node_offset, node_ndof, 12, active);
+
+        saveCrackToFile(
+            crack,
+            "mesh/crack_iteration_" + std::to_string(growth_step + 1) + ".txt"
+        );
     }
 
-    // heaviside elements
-    for (int i = 0; i < enriched_elements.heaviside_enriched.size(); i++)
+    // Важно: добавляем последний кадр уже ПОСЛЕ последнего успешного роста,
+    // чтобы финальное положение трещины тоже можно было посмотреть стрелками.
+    if (!growth_frames.empty())
     {
-        const auto &enriched_element = enriched_elements.heaviside_enriched[i];
-        const std::array<int, 4> &element = mesh.elements[enriched_element.id];
-        const HeavisideTriangulation &triangulation =
-            enriched_elements_triangulation.heaviside_enriched_triangulation[i];
-        Eigen::Matrix<double, 16, 16> Ke;
+        std::cout << "\nResolving final crack frame...\n";
 
-        Ke.setZero();
-        std::array<Eigen::Vector2d, 4> points = {
-            mesh.vertices[element[0]],
-            mesh.vertices[element[1]],
-            mesh.vertices[element[2]],
-            mesh.vertices[element[3]],
-        };
-        std::array<Eigen::Vector2d, 6> local_points = {Eigen::Vector2d{-1, -1},
-                                                       Eigen::Vector2d{1, -1},
-                                                       Eigen::Vector2d{1, 1},
-                                                       Eigen::Vector2d{-1, 1},
-                                                       enriched_element.intersection_points_local_coords[0],
-                                                       enriched_element.intersection_points_local_coords[1]};
-        int sign = 1;
-        const Eigen::Matrix<double, 4, 2> coords{{{points[0].x(), points[0].y()},
-                                                  {points[1].x(), points[1].y()},
-                                                  {points[2].x(), points[2].y()},
-                                                  {points[3].x(), points[3].y()}}};
-        std::array<int, 4> node_signs;
-        for (int n = 0; n < 4; ++n)
-        {
-            node_signs[n] = level_set_fields.vertices_level_set_signs[element[n]].sign;
-        }
-        // Eigen::Matrix2f J_xy_xieta = shape.dN_xi_eta * coords;
-        double total_area = 0.0;
-        for (unsigned int j = 0; j < triangulation.triangles_num; j++)
-        {
+        solve_result =
+            solveCrackIteration(
+                mesh,
+                crack,
+                w,
+                h,
+                wn,
+                hn,
+                thickness,
+                D,
+                disable_output,
+                disable_debug_output
+            );
 
-            const std::array<unsigned char, 3> &triangle = triangulation.tri_indices[j];
-            if (j >= triangulation.positive_heaviside_triangles_num)
-            {
-                sign = -1;
+        std::vector<TipKResult> final_k_results =
+            computeStress<13>(
+                solve_result.enriched_elements.tip_enriched,
+                solve_result.enriched_elements.heaviside_enriched,
+                mesh,
+                solve_result.enriched_elements_triangulation.tip_enriched_triangulation,
+                solve_result.enriched_elements_triangulation.heaviside_enriched_triangulation,
+                solve_result.u,
+                solve_result.node_offset,
+                solve_result.enriched_elements.heaviside_enriched_nodes,
+                solve_result.enriched_elements.tip_enriched_nodes,
+                solve_result.level_set_fields.vertices_level_set_signs,
+                LinearTriangle::Triangle13PointRule::gauss_pts,
+                LinearTriangle::Triangle13PointRule::gauss_wts,
+                solve_result.crack_tip_1_t,
+                solve_result.crack_tip_1_n,
+                solve_result.crack_tip_2_t,
+                solve_result.crack_tip_2_n,
+                D,
+                E,
+                nu,
+                Rin,
+                Rout
+            );
+
+        growth_frames.push_back(
+            GrowthFrame{
+                crack,
+                solve_result,
+                final_k_results
             }
-            Eigen::Matrix2d J_xieta_rs{{{local_points[triangle[1]].x() - local_points[triangle[0]].x(),
-                                         local_points[triangle[2]].x() - local_points[triangle[0]].x()},
-                                        {local_points[triangle[1]].y() - local_points[triangle[0]].y(),
-                                         local_points[triangle[2]].y() - local_points[triangle[0]].y()}}};
-            double det_tri = J_xieta_rs.determinant();
-            for (unsigned int gp = 0; gp < LinearTriangle::Triangle3PointRule::NGauss; gp++)
-            {
-                double r = LinearTriangle::Triangle3PointRule::gauss_pts[gp][0];
-                double s = LinearTriangle::Triangle3PointRule::gauss_pts[gp][1];
-                double t = 1 - r - s;
-                double xi = local_points[triangle[0]].x() * t + local_points[triangle[1]].x() * r +
-                            local_points[triangle[2]].x() * s;
-                double eta = local_points[triangle[0]].y() * t + local_points[triangle[1]].y() * r +
-                             local_points[triangle[2]].y() * s;
-                LinearQuad::ShapeData shape;
-                // Node 1
-                shape.N[0] = 0.25 * (1 - xi) * (1 - eta);
-                shape.dN_xi_eta(0, 0) = -0.25 * (1 - eta);
-                shape.dN_xi_eta(1, 0) = -0.25 * (1 - xi);
-                // Node 2
-                shape.N[1] = 0.25 * (1 + xi) * (1 - eta);
-                shape.dN_xi_eta(0, 1) = 0.25 * (1 - eta);
-                shape.dN_xi_eta(1, 1) = -0.25 * (1 + xi);
-                // Node 3
-                shape.N[2] = 0.25 * (1 + xi) * (1 + eta);
-                shape.dN_xi_eta(0, 2) = 0.25 * (1 + eta);
-                shape.dN_xi_eta(1, 2) = 0.25 * (1 + xi);
-                // Node 4
-                shape.N[3] = 0.25 * (1 - xi) * (1 + eta);
-                shape.dN_xi_eta(0, 3) = -0.25 * (1 + eta);
-                shape.dN_xi_eta(1, 3) = 0.25 * (1 - xi);
-                LinearTriangle::JacobianData jd;
-                jd.J = shape.dN_xi_eta * coords;
-                bool invertible;
-                jd.J.computeInverseAndDetWithCheck(jd.invJ, jd.detJ, invertible, 1e-12);
-                if (!invertible)
-                    throw std::runtime_error("Jacobi matrix is not invertible");
-                Eigen::Matrix<double, 2, 4> dN_dx_dy;
-                dN_dx_dy = jd.invJ * shape.dN_xi_eta;
-                Eigen::Matrix<double, 3, 16> B;
-                for (int i = 0; i < 4; ++i)
-                {
-                    B(0, 4 * i) = dN_dx_dy(0, i); // du/dx
-                    B(0, 4 * i + 1) = 0;
-                    B(1, 4 * i) = 0;
-                    B(1, 4 * i + 1) = dN_dx_dy(1, i); // dv/dy
-                    B(2, 4 * i) = dN_dx_dy(1, i);     // dv/dx
-                    B(2, 4 * i + 1) = dN_dx_dy(0, i); // du/dy
-
-                    double shifted_factor = sign - node_signs[i];      // = 0 on same side, ±2 on opposite
-                    B(0, 4 * i + 2) = dN_dx_dy(0, i) * shifted_factor; // du/dx
-                    B(0, 4 * i + 3) = 0;
-                    B(1, 4 * i + 2) = 0;
-                    B(1, 4 * i + 3) = dN_dx_dy(1, i) * shifted_factor; // dv/dy
-                    B(2, 4 * i + 2) = dN_dx_dy(1, i) * shifted_factor; // dv/dx
-                    B(2, 4 * i + 3) = dN_dx_dy(0, i) * shifted_factor; // du/dy
-                }
-                double factor =
-                    LinearTriangle::Triangle3PointRule::gauss_wts[gp] * std::abs(det_tri) * std::abs(jd.detJ);
-                if (det_tri < 0)
-                    std::cout << "det_tri < 0" << std::endl;
-                if (jd.detJ < 0)
-                    std::cout << "jd.detJ < 0" << std::endl;
-                Ke += factor * (B.transpose() * D * B) * thickness;
-                total_area += det_tri;
-            }
-        }
-        if (!disable_debug_output)
-        {
-            Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 16, 16>> es(Ke);
-            std::cout << "eigenvalues of heaviside element: " << es.eigenvalues() << std::endl;
-            std::cout << "total_area: " << total_area << std::endl;
-            std::cout << "det: " << Ke.determinant() << std::endl;
-            std::cout << element[0] << " " << element[1] << " " << element[2] << " " << element[3] << std::endl;
-        }
-
-        Eigen::Matrix<double, 48, 48> Ke_expanded;
-        Ke_expanded.setZero();
-        for (int i = 0; i < 4; ++i)
-        {
-            for (int j = 0; j < 4; ++j)
-            {
-                for (int k = 0; k < 4; k++)
-                {
-                    for (int l = 0; l < 4; l++)
-                    {
-                        Ke_expanded(12 * i + k, 12 * j + l) = Ke(4 * i + k, 4 * j + l);
-                    }
-                }
-            }
-        }
-        FEMAssemble::addElementSparseUpperStiffness(LinearQuad::Element{element[0], element[1], element[2], element[3]},
-                                                    Ke_expanded, triplets, node_offset, node_ndof, 12, active);
+        );
     }
 
-    Eigen::Matrix<double, 8, 8> Ke;
-    Eigen::Matrix<double, 16, 16> Ke_expanded;
-    Eigen::Matrix<double, 4, 2> coordMat;
-    unsigned int elementsTotal = mesh.elements.size();
-    unsigned int elementsCreated = 0;
-
-    // regular elements
-    unsigned int percent = 0, lastPercent = 0;
-    for (const int element_id : enriched_elements.regular)
+    if (growth_frames.empty())
     {
-        const std::array<int, 4> element = mesh.elements[element_id];
-        percent = static_cast<unsigned int>(100.0 * elementsCreated / elementsTotal);
-        if (percent > lastPercent)
-        { // чтобы не выводить одно и то же значение много раз
-            std::cout << percent << "% ";
-            lastPercent = percent;
-        }
-        for (int i = 0; i < 4; ++i)
-        {
-            coordMat(i, 0) = mesh.vertices[element[i]].x();
-            coordMat(i, 1) = mesh.vertices[element[i]].y();
-        }
-        Ke = LinearQuad::element_stiffness(coordMat, D, thickness);
-
-        Eigen::Matrix<double, 48, 48> Ke_expanded;
-        Ke_expanded.setZero();
-        for (int i = 0; i < 4; ++i)
-        {
-            for (int j = 0; j < 4; ++j)
-            {
-                for (int k = 0; k < 2; k++)
-                {
-                    for (int l = 0; l < 2; l++)
-                    {
-                        Ke_expanded(12 * i + k, 12 * j + l) = Ke(2 * i + k, 2 * j + l);
-                    }
-                }
-            }
-        }
-        FEMAssemble::addElementSparseUpperStiffness(LinearQuad::Element{element[0], element[1], element[2], element[3]},
-                                                    Ke_expanded, triplets, node_offset, node_ndof, 12, active);
-
-        elementsCreated++;
+        throw std::runtime_error("No growth frames were created");
     }
 
-    std::cout << std::endl;
-    auto K = FEMAssemble::createStiffnessFromTriplets(triplets, dof_counter);
+    saveCrackToFile(crack, "mesh/crack_final.txt");
 
-    std::cout << "Global stiffness matrix is assembled" << std::endl;
-    if (!disable_output)
+    std::vector<GrowthFrameVisual> growth_visuals;
+    growth_visuals.reserve(growth_frames.size());
+
+    for (const GrowthFrame& frame : growth_frames)
     {
-        std::cout << "Writing to file." << std::endl;
-        Eigen::MatrixXd spK = Eigen::MatrixXd(K);
-        std::ofstream KoutFile("K.txt");
-        KoutFile << spK;
+        growth_visuals.push_back(
+            makeGrowthFrameVisual(
+                frame,
+                mesh,
+                D,
+                scale
+            )
+        );
     }
 
-    std::cout << "Creating RHS" << std::endl;
-    Eigen::VectorXd P(dof_counter);
-    P.setZero();
+    const VonMisesScale vm_scale = applyVonMisesColors(growth_visuals);
 
-    std::cout << "Applying boundary conditions" << std::endl;
-    std::vector<int> fixedDofs;
-    std::vector<double> fixedValues;
-    applyBC(w, h, wn, hn, thickness, P, node_offset, fixedDofs, fixedValues);
-    FEMAssemble::applyDirichletSymmetric(K, P, fixedDofs, fixedValues);
+    const std::vector<Eigen::Vector2d> first_displaced_vertices =
+        makeDisplacedVertices(
+            mesh,
+            growth_frames.front().solve_result,
+            scale
+        );
 
-    if (!disable_output)
-    {
-        std::cout << "Writing to file" << std::endl;
-        std::ostringstream KBCout;
-        KBCout << Eigen::MatrixXd(K);
-        std::ofstream KBCoutFile("KBC.txt");
-        KBCoutFile << KBCout.str();
-        std::ostringstream Pout;
-        Pout << P;
-        std::ofstream PoutFile("P.txt");
-        PoutFile << Pout.str();
-    }
-    for (int i = 0; i < dof_counter; ++i)
-    {
-        if (!active[i])
-        {
-            // DOF never used – fix to zero
-            K.coeffRef(i, i) = 1.0;
-            P(i) = 0.0;
-        }
-    }
-    std::cout << "Solving linear system" << std::endl;
-    Eigen::VectorXd u = FEMAssemble::solveSparseSPDUpper(K, P);
-    // Eigen::MatrixXd Kdense = K;
-    // Eigen::MatrixXd diff = Kdense - Kdense.transpose();
-    // // std::cout << diff << std::endl;
-    // std::cout << "Max asymmetry: " << diff.maxCoeff() << std::endl;
-    std::cout << "Energy: " << 0.5 * u.dot(K.selfadjointView<Eigen::Upper>() * u) << std::endl;
-    // std::cout << "Ku - P: " << K*u - P << std::endl;
-    // Eigen::VectorXd residual = K * u - P;
-    Eigen::VectorXd residual = K.selfadjointView<Eigen::Upper>() * u - P;
-    double residual_norm = residual.norm();
-    // std::cout << "Ku - P: " << residual << std::endl;
-    std::cout << "||Ku - P|| = " << residual_norm << std::endl;
-    // std::cout << "Writing result (vector u) to file" << std::endl;
-    // std::ostringstream Uout;
-    // Uout << u;
-    // std::ofstream UoutFile("U.txt");
-    // UoutFile << Uout.str();
-    // Eigen::VectorXd u;
-    // u.setZero(dof_counter);
-    std::cout << "Post-processing" << std::endl;
+    glm::vec2 v1 =
+        toGlm(first_displaced_vertices.front().cast<float>().eval());
 
-    std::cout << "Scaling results with factor: " << scale << std::endl;
-    std::vector<Eigen::Vector2d> node_displacement(total_vertices);
-    for (int n = 0; n < total_vertices; ++n)
-    {
-        int off = node_offset[n];
-        // Standard DOFs are the first two at offset 'off' and 'off+1'
-        node_displacement[n].x() = u(off);
-        node_displacement[n].y() = u(off + 1);
-    }
-    std::vector<Eigen::Vector2d> vertices_displaced = mesh.vertices;
-    for (int idx = 0; idx < total_vertices; ++idx)
-    {
-        vertices_displaced[idx] +=
-            Eigen::Vector2d(node_displacement[idx].x() * scale, node_displacement[idx].y() * scale);
-    }
+    glm::vec2 v3 =
+        toGlm(first_displaced_vertices.back().cast<float>().eval());
 
-    glm::vec2 v1 = toGlm(vertices_displaced[0].cast<float>().eval()),
-              v3 = toGlm(vertices_displaced[vertices_displaced.size() - 1].cast<float>().eval());
-    camera.Position = glm::vec3{(v1 + v3) / 2.0f, 1.0f};
+    camera.Position =
+        glm::vec3{(v1 + v3) / 2.0f, 1.0f};
+
     camera.Zoom = 90.0f;
     camera.MovementSpeed = 0.5f;
-    std::cout << "fdsfdsf" << std::endl;
-
-    drawVonMisesStressField(enriched_elements.tip_enriched, enriched_elements.heaviside_enriched, mesh,
-                            enriched_elements_triangulation.tip_enriched_triangulation,
-                            enriched_elements_triangulation.heaviside_enriched_triangulation, u, node_offset,
-                            enriched_elements.heaviside_enriched_nodes, enriched_elements.tip_enriched_nodes,
-                            level_set_fields.vertices_level_set_signs, crack_tip_1_t, crack_tip_1_n, crack_tip_2_t,
-                            crack_tip_2_n, D, scale);
 
     GLFWwindow *window;
 
-    /* Initialize the library */
     if (!glfwInit())
+    {
         return -1;
+    }
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6); // use 4.6
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
-    /* Create a windowed mode window and its OpenGL context */
-    window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Hello World", NULL, NULL);
+    window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "XFEM crack growth frames", NULL, NULL);
+
     if (!window)
     {
         glfwTerminate();
         return -1;
     }
 
-    /* Make the window's context current */
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
@@ -1157,152 +2191,92 @@ int main()
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
     }
+
     checkGLSLVersion();
+
     std::filesystem::path cwd = std::filesystem::current_path();
     std::cout << "Current working directory: " << cwd << std::endl;
 
-    std::vector<Circle> circles;
-    std::vector<Rectangle> rectangles;
-    std::vector<Quad> quads;
-    std::vector<PolygonalChain> polygonal_chains;
-
-
-    for (const auto &element : mesh.elements)
-    {
-        quads.push_back(Quad{toGlm(vertices_displaced[element[0]].cast<float>().eval()),
-                             toGlm(vertices_displaced[element[1]].cast<float>().eval()),
-                             toGlm(vertices_displaced[element[2]].cast<float>().eval()),
-                             toGlm(vertices_displaced[element[3]].cast<float>().eval()),
-                             packColor(glm::vec4(1.0f, 0.0f, 0.0f, 1.0f))});
-    }
-
-    drawHeavisideElements(
-        enriched_elements.heaviside_enriched, mesh, enriched_elements_triangulation.heaviside_enriched_triangulation,
-        level_set_fields.vertices_level_set_signs, u, node_offset, enriched_elements.heaviside_enriched_nodes, scale);
-    drawTipElements(enriched_elements.tip_enriched, enriched_elements.heaviside_enriched, mesh, u, node_offset,
-                    enriched_elements.heaviside_enriched_nodes, enriched_elements.tip_enriched_nodes,
-                    level_set_fields.vertices_level_set_signs, scale, polygonal_chains, crack_tip_1_t, crack_tip_1_n,
-                    crack_tip_2_t, crack_tip_2_n);
-    std::vector<TipKResult> k_results =
-        computeStress<13>(enriched_elements.tip_enriched, enriched_elements.heaviside_enriched, mesh,
-                          enriched_elements_triangulation.tip_enriched_triangulation,
-                          enriched_elements_triangulation.heaviside_enriched_triangulation, u, node_offset,
-                          enriched_elements.heaviside_enriched_nodes, enriched_elements.tip_enriched_nodes,
-                          level_set_fields.vertices_level_set_signs, LinearTriangle::Triangle13PointRule::gauss_pts,
-                          LinearTriangle::Triangle13PointRule::gauss_wts, crack_tip_1_t, crack_tip_1_n, crack_tip_2_t,
-                          crack_tip_2_n, D, E, nu, Rin, Rout);
-    if (!k_results.empty())
-    {
-        double max_Keq = 0.0;
-
-        for (const TipKResult &r : k_results)
-        {
-            const double Keq = computeEquivalentK(r.K_I, r.K_II);
-            max_Keq = std::max(max_Keq, Keq);
-        }
-
-        // Для первого теста делаем KIC ниже текущего Keq,
-        // чтобы трещина точно выросла.
-        const double KIC_demo = 0.7 * max_Keq;
-
-        // Длина прироста: половина размера элемента.
-        const double da = 5 * std::min(wh, hh);
-
-        const bool grown = growCrackOneStep(crack, k_results, KIC_demo, da, w, h);
-
-        if (grown)
-        {
-            saveCrackToFile(crack, "mesh/crack_grown.txt");
-
-            std::cout << "Crack growth step completed.\n";
-            std::cout << "To continue growth, copy mesh/crack_grown.txt to mesh/crack.txt and run again.\n";
-        }
-        else
-        {
-            std::cout << "Crack did not grow on this step.\n";
-        }
-    }
-
-    unsigned int idx;
-    for (int i = 0; i < wn; i++)
-    {
-        for (int j = 0; j < hn; j++)
-        {
-            idx = j * wn + i;
-            circles.push_back(Circle{glm::vec3{toGlm(vertices_displaced[idx].cast<float>().eval()), 1.0f / SCR_WIDTH},
-                                     glm::vec4{0.0f, 1.0f, 0.0f, 1.0f}});
-        }
-    }
-
-    PolygonalChain crack_chain;
-
-    crack_chain.color = glm::vec4(0.0f, 1.0f, 1.0f, 1.0f);
-
-    for (const Eigen::Vector2d vertex : crack.vertices)
-    {
-        crack_chain.points.push_back(glm::vec2(vertex.x(), vertex.y()));
-    }
-    polygonal_chains.push_back(crack_chain);
+    std::cout << "\nControls:\n";
+    std::cout << "  RIGHT / D : next crack-growth frame\n";
+    std::cout << "  LEFT  / A : previous crack-growth frame\n";
+    std::cout << "  SPACE     : play / pause\n";
+    std::cout << "  R         : restart to frame 0\n";
+    std::cout << "  ESC       : close window\n\n";
 
     Shader xfem_shader("shaders/xfem.vert", "shaders/xfem.frag");
-
-    std::vector<Vertex> chain_vertices;
-    std::vector<GLint> firstsStrip;
-    std::vector<GLsizei> countsStrip;
-    std::vector<GLint> firstsLoop;
-    std::vector<GLsizei> countsLoop;
-
     Shader chain_program("shaders/pchain.vert", "shaders/pchain.frag");
-    for (const PolygonalChain &chain : polygonal_chains)
-    {
-        if (chain.points.empty())
-            continue;
+    Shader circle_shader("shaders/circle.vert", "shaders/circle.frag");
+    Shader quad_shader("shaders/quad.vert", "shaders/quad.frag");
+    Shader overlay_shader("shaders/overlay_2d.vert", "shaders/overlay_2d.frag");
+    Shader overlay_text_shader("shaders/overlay_text.vert", "shaders/overlay_text.frag");
 
-        size_t start = chain_vertices.size();
-        uint32_t packedColor = packColor(chain.color);
+    // -----------------------------
+    // Crack line VBO / VAO
+    // -----------------------------
+    GLuint chainVAO = 0;
+    GLuint chainVBO = 0;
 
-        for (const auto &pt : chain.points)
-        {
-            chain_vertices.push_back({pt, packedColor});
-        }
-
-        firstsStrip.push_back(static_cast<GLint>(start));
-        countsStrip.push_back(static_cast<GLsizei>(chain.points.size()));
-    }
-
-    GLuint chainVAO, chainVBO;
     glGenVertexArrays(1, &chainVAO);
     glGenBuffers(1, &chainVBO);
 
     glBindVertexArray(chainVAO);
     glBindBuffer(GL_ARRAY_BUFFER, chainVBO);
-    glBufferData(GL_ARRAY_BUFFER, chain_vertices.size() * sizeof(Vertex), chain_vertices.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
 
-    // Атрибут 0: позиция (2 float)
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)offsetof(Vertex, position));
     glEnableVertexAttribArray(0);
 
-    // Атрибут 1: цвет (упакованный GL_UNSIGNED_BYTE, нормализованный)
     glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(Vertex), (void *)offsetof(Vertex, colorPacked));
     glEnableVertexAttribArray(1);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
 
-    Shader circle_shader("shaders/circle.vert", "shaders/circle.frag");
-    GLuint circleVerticesVBO, circleVBO, circleVAO;
+    // -----------------------------
+    // Von Mises stress field VBO / VAO
+    // Reuses pchain shader layout: vec2 position + packed RGBA color.
+    // -----------------------------
+    GLuint vonMisesVAO = 0;
+    GLuint vonMisesVBO = 0;
+
+    glGenVertexArrays(1, &vonMisesVAO);
+    glGenBuffers(1, &vonMisesVBO);
+
+    glBindVertexArray(vonMisesVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, vonMisesVBO);
+    glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)offsetof(Vertex, position));
+    glEnableVertexAttribArray(0);
+
+    glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(Vertex), (void *)offsetof(Vertex, colorPacked));
+    glEnableVertexAttribArray(1);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    // -----------------------------
+    // Circle VBO / VAO
+    // -----------------------------
+    GLuint circleVerticesVBO = 0;
+    GLuint circleVBO = 0;
+    GLuint circleVAO = 0;
     constexpr int circles_vertices_number = 22;
-    if (circles.size())
+
     {
         constexpr float PI = glm::pi<float>();
         std::vector<glm::vec2> circle_vertices;
         circle_vertices.resize(circles_vertices_number);
         circle_vertices[0].x = 0.0f;
         circle_vertices[0].y = 0.0f;
-        for (int i = 1; i < circles_vertices_number; i++)
+
+        for (int i = 1; i < circles_vertices_number; ++i)
         {
-            circle_vertices[i].x = glm::cos(2 * PI / (circles_vertices_number - 2) * (i - 1));
-            circle_vertices[i].y = glm::sin(2 * PI / (circles_vertices_number - 2) * (i - 1));
+            circle_vertices[i].x =
+                glm::cos(2.0f * PI / static_cast<float>(circles_vertices_number - 2) * static_cast<float>(i - 1));
+            circle_vertices[i].y =
+                glm::sin(2.0f * PI / static_cast<float>(circles_vertices_number - 2) * static_cast<float>(i - 1));
         }
 
         glGenBuffers(1, &circleVerticesVBO);
@@ -1310,69 +2284,38 @@ int main()
         glGenVertexArrays(1, &circleVAO);
 
         glBindVertexArray(circleVAO);
+
         glEnableVertexAttribArray(0);
         glBindBuffer(GL_ARRAY_BUFFER, circleVerticesVBO);
-        glBufferData(GL_ARRAY_BUFFER, (circles_vertices_number) * 2 * sizeof(float), &circle_vertices[0],
-                     GL_STATIC_DRAW);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            circle_vertices.size() * sizeof(glm::vec2),
+            circle_vertices.data(),
+            GL_STATIC_DRAW
+        );
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), (void *)0);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
+
         glEnableVertexAttribArray(1);
         glBindBuffer(GL_ARRAY_BUFFER, circleVBO);
-        glBufferData(GL_ARRAY_BUFFER, circles.size() * sizeof(Circle), &circles[0], GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Circle), (void *)0);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
         glVertexAttribDivisor(1, 1);
+
         glEnableVertexAttribArray(2);
-        glBindBuffer(GL_ARRAY_BUFFER, circleVBO);
         glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(Circle), (void *)sizeof(glm::vec3));
+        glVertexAttribDivisor(2, 1);
+
         glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glVertexAttribDivisor(2, 1);
+        glBindVertexArray(0);
     }
-    Shader rectangle_shader("shaders/rect.vert", "shaders/rect.frag");
-    GLuint rectangleVerticesVBO, rectangleVerticesEBO, rectangleVBO, rectangleVAO;
-    if (rectangles.size())
-    {
 
-        std::vector<glm::vec2> rectangle_vertices;
-        rectangle_vertices.push_back(glm::vec2(0.0f, 0.0f));
-        rectangle_vertices.push_back(glm::vec2(1.0f, 0.0f));
-        rectangle_vertices.push_back(glm::vec2(1.0f, 1.0f));
-        rectangle_vertices.push_back(glm::vec2(0.0f, 1.0f));
+    // -----------------------------
+    // Quad VBO / VAO
+    // -----------------------------
+    GLuint quadVerticesVBO = 0;
+    GLuint quadVBO = 0;
+    GLuint quadVAO = 0;
 
-        std::vector<GLuint> rectangle_indices = {
-            0, 1, 3, // first triangle
-            1, 2, 3  // second triangle
-        };
-
-        glGenBuffers(1, &rectangleVerticesVBO);
-        glGenBuffers(1, &rectangleVerticesEBO);
-        glGenBuffers(1, &rectangleVBO);
-        glGenVertexArrays(1, &rectangleVAO);
-
-        glBindVertexArray(rectangleVAO);
-        glEnableVertexAttribArray(0);
-        glBindBuffer(GL_ARRAY_BUFFER, rectangleVerticesVBO);
-        glBufferData(GL_ARRAY_BUFFER, rectangle_vertices.size() * sizeof(glm::vec2), rectangle_vertices.data(),
-                     GL_STATIC_DRAW);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), (void *)0);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rectangleVerticesEBO);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, rectangle_indices.size() * sizeof(GLuint), rectangle_indices.data(),
-                     GL_STATIC_DRAW);
-
-        glEnableVertexAttribArray(1);
-        glBindBuffer(GL_ARRAY_BUFFER, rectangleVBO);
-        glBufferData(GL_ARRAY_BUFFER, rectangles.size() * sizeof(Rectangle), &rectangles[0], GL_STATIC_DRAW);
-        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Rectangle), (void *)0);
-        glVertexAttribDivisor(1, 1);
-        glEnableVertexAttribArray(2);
-        glBindBuffer(GL_ARRAY_BUFFER, rectangleVBO);
-        glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(Rectangle), (void *)sizeof(glm::vec4));
-        glVertexAttribDivisor(2, 1);
-    }
-    Shader quad_shader("shaders/quad.vert", "shaders/quad.frag");
-    GLuint quadVerticesVBO, quadVBO, quadVAO;
-
-    if (quads.size())
     {
         std::vector<glm::vec2> rectangle_vertices;
         rectangle_vertices.push_back(glm::vec2(0.0f, 0.0f));
@@ -1383,101 +2326,256 @@ int main()
         glGenBuffers(1, &quadVerticesVBO);
         glGenBuffers(1, &quadVBO);
         glGenVertexArrays(1, &quadVAO);
+
         glBindVertexArray(quadVAO);
 
         glEnableVertexAttribArray(0);
         glBindBuffer(GL_ARRAY_BUFFER, quadVerticesVBO);
-        glBufferData(GL_ARRAY_BUFFER, rectangle_vertices.size() * sizeof(glm::vec2), &rectangle_vertices[0],
-                     GL_STATIC_DRAW);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            rectangle_vertices.size() * sizeof(glm::vec2),
+            rectangle_vertices.data(),
+            GL_STATIC_DRAW
+        );
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), (void *)0);
 
         glEnableVertexAttribArray(1);
         glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
-        glBufferData(GL_ARRAY_BUFFER, quads.size() * sizeof(Quad), &quads[0], GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
         glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Quad), (void *)0);
         glVertexAttribDivisor(1, 1);
+
         glEnableVertexAttribArray(2);
-        glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
         glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Quad), (void *)offsetof(struct Quad, v10));
         glVertexAttribDivisor(2, 1);
+
         glEnableVertexAttribArray(3);
         glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(Quad), (void *)offsetof(struct Quad, v11));
         glVertexAttribDivisor(3, 1);
+
         glEnableVertexAttribArray(4);
         glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, sizeof(Quad), (void *)offsetof(struct Quad, v01));
         glVertexAttribDivisor(4, 1);
+
         glEnableVertexAttribArray(5);
         glVertexAttribPointer(5, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(Quad), (void *)offsetof(Quad, color));
         glVertexAttribDivisor(5, 1);
+
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
     }
 
-    TriangleGUI::Renderer::instance().initializeGL();
+    std::vector<OverlayVertex> legend_tri_verts;
+    std::vector<OverlayVertex> legend_line_verts;
+    buildVonMisesLegendGeometry(legend_tri_verts, legend_line_verts);
+
+    LegendGL legend_gl;
+    initLegendGL(legend_gl, legend_tri_verts, legend_line_verts);
+
+    // Uses a Windows system sans-serif font. Arial is visually close to the classic ANSYS legend labels.
+    FontAtlasGL legend_font = createWindowsFontAtlasGL("Arial", 16);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
     glfwSwapInterval(1);
+
+    int current_growth_frame = 0;
+    bool play_animation = false;
+    const double frame_duration = 0.10;
+    double last_auto_switch_time = glfwGetTime();
+    bool frame_dirty = true;
+
+    std::unordered_set<int> pressed_keys;
+
     while (!glfwWindowShouldClose(window))
     {
-        // per-frame time logic
-        // --------------------
-        float currentFrame = static_cast<float>(glfwGetTime());
+        const float currentFrame = static_cast<float>(glfwGetTime());
         deltaTime = currentFrame - lastFrame;
         lastFrame = currentFrame;
 
-        // input
-        // -----
-
         processInput(window);
+
+        bool input_changed_frame = false;
+
+        if (keyPressedOnce(window, GLFW_KEY_RIGHT, pressed_keys) ||
+            keyPressedOnce(window, GLFW_KEY_D, pressed_keys))
+        {
+            if (current_growth_frame + 1 < static_cast<int>(growth_visuals.size()))
+            {
+                ++current_growth_frame;
+                input_changed_frame = true;
+            }
+        }
+
+        if (keyPressedOnce(window, GLFW_KEY_LEFT, pressed_keys) ||
+            keyPressedOnce(window, GLFW_KEY_A, pressed_keys))
+        {
+            if (current_growth_frame > 0)
+            {
+                --current_growth_frame;
+                input_changed_frame = true;
+            }
+        }
+
+        if (keyPressedOnce(window, GLFW_KEY_SPACE, pressed_keys))
+        {
+            play_animation = !play_animation;
+            last_auto_switch_time = glfwGetTime();
+            std::cout << "Animation: " << (play_animation ? "PLAY" : "PAUSE") << std::endl;
+        }
+
+        if (keyPressedOnce(window, GLFW_KEY_R, pressed_keys))
+        {
+            current_growth_frame = 0;
+            play_animation = false;
+            input_changed_frame = true;
+        }
+
+        if (play_animation)
+        {
+            const double now = glfwGetTime();
+
+            if (now - last_auto_switch_time >= frame_duration)
+            {
+                if (current_growth_frame + 1 < static_cast<int>(growth_visuals.size()))
+                {
+                    ++current_growth_frame;
+                }
+                else
+                {
+                    play_animation = false;
+                }
+
+                last_auto_switch_time = now;
+                input_changed_frame = true;
+            }
+        }
+
+        if (input_changed_frame)
+        {
+            std::cout << "Frame " << current_growth_frame + 1
+                      << " / " << growth_visuals.size()
+                      << std::endl;
+            frame_dirty = true;
+            draw = true;
+        }
+
+        if (frame_dirty)
+        {
+            uploadGrowthFrameVisual(
+                growth_visuals[current_growth_frame],
+                quadVBO,
+                circleVBO,
+                chainVBO,
+                vonMisesVBO
+            );
+
+            char title[512];
+            std::snprintf(
+                title,
+                sizeof(title),
+                "XFEM von Mises | frame %d / %d | min %.3e | max %.3e | Left/Right switch, Space play",
+                current_growth_frame + 1,
+                static_cast<int>(growth_visuals.size()),
+                vm_scale.vmin,
+                vm_scale.vmax
+            );
+            glfwSetWindowTitle(window, title);
+
+            frame_dirty = false;
+            draw = true;
+        }
+
         if (!draw)
         {
-            glfwWaitEvents();
+            glfwWaitEventsTimeout(0.02);
             continue;
         }
 
-        /* Render here */
         glClear(GL_COLOR_BUFFER_BIT);
+
         glm::mat4 projection =
-            glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
-        xfem_shader.use();
+            glm::perspective(
+                glm::radians(camera.Zoom),
+                static_cast<float>(SCR_WIDTH) / static_cast<float>(SCR_HEIGHT),
+                0.1f,
+                100.0f
+            );
+
         glm::mat4 view = camera.GetViewMatrix();
         glm::mat4 MVP = projection * view;
+
+        const GrowthFrameVisual& visual =
+            growth_visuals[current_growth_frame];
 
         quad_shader.use();
         quad_shader.setMat4("mvp", MVP);
         glBindVertexArray(quadVAO);
-        glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, 4, quads.size());
+        glDrawArraysInstanced(
+            GL_TRIANGLE_FAN,
+            0,
+            4,
+            static_cast<GLsizei>(visual.quads.size())
+        );
 
-        if (circles.size())
+        if (!visual.von_mises_vertices.empty())
+        {
+            chain_program.use();
+            chain_program.setMat4("mvp", MVP);
+            glBindVertexArray(vonMisesVAO);
+            glDrawArrays(
+                GL_TRIANGLES,
+                0,
+                static_cast<GLsizei>(visual.von_mises_vertices.size())
+            );
+        }
+
+        if (!visual.circles.empty())
         {
             circle_shader.use();
             circle_shader.setMat4("mvp", MVP);
             glBindVertexArray(circleVAO);
-            glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, circles_vertices_number, circles.size());
+            glDrawArraysInstanced(
+                GL_TRIANGLE_FAN,
+                0,
+                circles_vertices_number,
+                static_cast<GLsizei>(visual.circles.size())
+            );
         }
 
-        chain_program.use();
-        chain_program.setMat4("mvp", MVP);
-        glBindVertexArray(chainVAO);
-
-        if (!firstsStrip.empty())
+        if (!visual.crack_vertices.empty())
         {
-            glMultiDrawArrays(GL_LINE_STRIP, firstsStrip.data(), countsStrip.data(), firstsStrip.size());
-        }
-        if (!firstsLoop.empty())
-        {
-            glMultiDrawArrays(GL_LINE_LOOP, firstsLoop.data(), countsLoop.data(), firstsLoop.size());
+            chain_program.use();
+            chain_program.setMat4("mvp", MVP);
+            glBindVertexArray(chainVAO);
+            glLineWidth(3.0f);
+            glDrawArrays(
+                GL_LINE_STRIP,
+                0,
+                static_cast<GLsizei>(visual.crack_vertices.size())
+            );
         }
 
-        TriangleGUI::Renderer::instance().draw(MVP);
         glBindVertexArray(0);
 
-        /* Swap front and back buffers */
+        overlay_shader.use();
+        drawLegendGL(legend_gl);
+
+        std::vector<TextVertex> legend_text_vertices =
+            buildLegendTextVertices(
+                legend_font,
+                vm_scale,
+                current_growth_frame,
+                static_cast<int>(growth_visuals.size()),
+                static_cast<int>(SCR_WIDTH),
+                static_cast<int>(SCR_HEIGHT)
+            );
+
+        uploadTextVertices(legend_font, legend_text_vertices);
+        overlay_text_shader.use();
+        drawTextGL(legend_font);
+
         glfwSwapBuffers(window);
-
-        /* Poll for and process events */
-
-        // std::cout << 1.0 / deltaTime << std::endl;
         draw = false;
         glfwPollEvents();
     }

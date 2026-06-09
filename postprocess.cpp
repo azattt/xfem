@@ -1567,45 +1567,6 @@ template std::vector<TipKResult> computeStress<13>(
     const double poisson_ratio, const double Rin, const double Rout);
 
 
-void computeCrackTipDirections(
-    const Crack& crack,
-    Eigen::Vector2d& crack_tip_1_t,
-    Eigen::Vector2d& crack_tip_1_n,
-    Eigen::Vector2d& crack_tip_2_t,
-    Eigen::Vector2d& crack_tip_2_n
-)
-{
-    if (crack.indices.empty())
-    {
-        throw std::runtime_error("Crack has no segments");
-    }
-
-    const CrackSegment& first_segment = crack.indices.front();
-
-    Eigen::Vector2d first_dir =
-        crack.vertices[first_segment.v0] -
-        crack.vertices[first_segment.v1];
-
-    crack_tip_1_t = first_dir.normalized();
-
-    crack_tip_1_n = Eigen::Vector2d{
-        -crack_tip_1_t.y(),
-         crack_tip_1_t.x()
-    };
-
-    const CrackSegment& last_segment = crack.indices.back();
-
-    Eigen::Vector2d last_dir =
-        crack.vertices[last_segment.v1] -
-        crack.vertices[last_segment.v0];
-
-    crack_tip_2_t = last_dir.normalized();
-
-    crack_tip_2_n = Eigen::Vector2d{
-        -crack_tip_2_t.y(),
-         crack_tip_2_t.x()
-    };
-}
 void drawVonMisesStressField(
     const std::vector<TipEnriched>& tip_enriched,
     const std::vector<HeavisideEnriched>& heaviside_enriched,
