@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <numbers>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -300,12 +301,285 @@ void saveCrackToFile(const Crack &crack, const std::string &filename)
     std::cout << "Crack saved to: " << filename << std::endl;
 }
 
+static Crack buildCrackFromPoints(const std::vector<Eigen::Vector2d>& points)
+{
+    if (points.size() < 2)
+    {
+        throw std::runtime_error("A crack must contain at least two points");
+    }
+
+    Crack crack;
+    crack.vertices = points;
+    crack.indices.reserve(points.size() - 1);
+
+    for (std::size_t i = 1; i < points.size(); ++i)
+    {
+        crack.indices.push_back(
+            CrackSegment{
+                static_cast<int>(i - 1),
+                static_cast<int>(i)
+            }
+        );
+    }
+
+    return crack;
+}
+
+static std::vector<Crack> loadCracksFromFile(const std::string& filename)
+{
+    std::ifstream in(filename);
+
+    if (!in.is_open())
+    {
+        throw std::runtime_error("Cannot open cracks file: " + filename);
+    }
+
+    std::vector<Crack> cracks;
+    std::vector<Eigen::Vector2d> current_points;
+
+    auto flushCurrentCrack = [&]() {
+        if (current_points.empty())
+        {
+            return;
+        }
+
+        if (current_points.size() < 2)
+        {
+            throw std::runtime_error("Invalid cracks file: one crack has less than two points");
+        }
+
+        cracks.push_back(buildCrackFromPoints(current_points));
+        current_points.clear();
+    };
+
+    std::string line;
+
+    while (std::getline(in, line))
+    {
+        const std::size_t first = line.find_first_not_of(" \t\r\n");
+
+        if (first == std::string::npos)
+        {
+            // Blank line separates cracks.
+            flushCurrentCrack();
+            continue;
+        }
+
+        if (line[first] == '#')
+        {
+            // Comment/header line. Does not separate cracks by itself.
+            continue;
+        }
+
+        std::istringstream iss(line);
+        double x = 0.0;
+        double y = 0.0;
+
+        if (!(iss >> x >> y))
+        {
+            throw std::runtime_error("Invalid point line in cracks file: " + line);
+        }
+
+        current_points.push_back(Eigen::Vector2d{x, y});
+    }
+
+    flushCurrentCrack();
+
+    if (cracks.empty())
+    {
+        throw std::runtime_error("No cracks were loaded from: " + filename);
+    }
+
+    return cracks;
+}
+
+static std::vector<Crack> loadCracksWithFallback()
+{
+    const std::string multi_file = "mesh/cracks.txt";
+    const std::string single_file = "mesh/crack.txt";
+
+    if (std::filesystem::exists(multi_file))
+    {
+        std::vector<Crack> cracks = loadCracksFromFile(multi_file);
+        std::cout << "Loaded " << cracks.size() << " cracks from " << multi_file << std::endl;
+        return cracks;
+    }
+
+    std::vector<Crack> cracks = loadCracksFromFile(single_file);
+    std::cout << "Loaded " << cracks.size() << " crack from " << single_file << std::endl;
+    return cracks;
+}
+
+static void saveCracksToFile(
+    const std::vector<Crack>& cracks,
+    const std::string& filename
+)
+{
+    std::ofstream out(filename);
+
+    if (!out.is_open())
+    {
+        throw std::runtime_error("Cannot open cracks file for writing: " + filename);
+    }
+
+    for (std::size_t ci = 0; ci < cracks.size(); ++ci)
+    {
+        const Crack& crack = cracks[ci];
+
+        if (crack.indices.empty())
+        {
+            continue;
+        }
+
+        out << "# crack " << ci << "\n";
+
+        const int first_id = crack.indices.front().v0;
+        out << crack.vertices[first_id].x() << " " << crack.vertices[first_id].y() << "\n";
+
+        for (const CrackSegment& seg : crack.indices)
+        {
+            const Eigen::Vector2d& p = crack.vertices[seg.v1];
+            out << p.x() << " " << p.y() << "\n";
+        }
+
+        if (ci + 1 < cracks.size())
+        {
+            out << "\n";
+        }
+    }
+
+
+    std::cout << "Cracks saved to: " << filename << std::endl;
+}
+
+struct HydraulicFractureParameters
+{
+    // Pa. Internal fluid pressure applied to every crack face in the simplified LEFM model.
+    double pressure_start = 0.10e6;
+    double pressure_step = 0.15e6;
+    double pressure_max = 3.00e6;
+
+    // Pa * sqrt(m). Typical starting value for soda-lime glass.
+    double KIC = 0.75e6;
+
+    // Crack growth increment: da = da_factor * min(element_width, element_height).
+    double da_factor = 1.5;
+};
+
+static HydraulicFractureParameters loadHydraulicFractureParameters()
+{
+    HydraulicFractureParameters p;
+
+    const std::string filename = "mesh/hydrofracture.txt";
+    std::ifstream in(filename);
+
+    if (!in.is_open())
+    {
+        std::cout << "mesh/hydrofracture.txt not found. Using default hydraulic-fracture parameters.\n";
+        return p;
+    }
+
+    // Format:
+    // pressure_start pressure_step pressure_max KIC da_factor
+    if (!(in >> p.pressure_start >> p.pressure_step >> p.pressure_max >> p.KIC >> p.da_factor))
+    {
+        throw std::runtime_error(
+            "Invalid mesh/hydrofracture.txt. Expected: pressure_start pressure_step pressure_max KIC da_factor"
+        );
+    }
+
+    std::cout << "Hydraulic fracture parameters loaded:\n";
+    std::cout << "  pressure_start = " << p.pressure_start << " Pa\n";
+    std::cout << "  pressure_step  = " << p.pressure_step  << " Pa\n";
+    std::cout << "  pressure_max   = " << p.pressure_max   << " Pa\n";
+    std::cout << "  KIC            = " << p.KIC            << " Pa*sqrt(m)\n";
+    std::cout << "  da_factor      = " << p.da_factor      << "\n";
+
+    return p;
+}
+
+static double computeCrackPolylineLength(const Crack& crack)
+{
+    double length = 0.0;
+
+    for (const CrackSegment& seg : crack.indices)
+    {
+        const Eigen::Vector2d& a = crack.vertices[seg.v0];
+        const Eigen::Vector2d& b = crack.vertices[seg.v1];
+        length += (b - a).norm();
+    }
+
+    return length;
+}
+
+static double computeHydraulicPressureKI(
+    const Crack& crack,
+    double fluid_pressure_pa,
+    double min_effective_length
+)
+{
+    // Simplified LEFM hydraulic opening contribution.
+    // For an internal crack of total length 2a: K_I ~= p * sqrt(pi*a).
+    // For a general polyline demo, use a_eff = max(total_length/2, min_effective_length).
+    const double total_length = computeCrackPolylineLength(crack);
+    const double a_eff = std::max(0.5 * total_length, min_effective_length);
+
+    return fluid_pressure_pa * std::sqrt(std::numbers::pi * a_eff);
+}
+
+static std::vector<TipKResult> addHydraulicPressureToKResults(
+    const Crack& crack,
+    const std::vector<TipKResult>& mechanical_k_results,
+    double fluid_pressure_pa,
+    double min_effective_length
+)
+{
+    std::vector<TipKResult> out;
+    out.reserve(mechanical_k_results.size());
+
+    const double K_hydraulic =
+        computeHydraulicPressureKI(
+            crack,
+            fluid_pressure_pa,
+            min_effective_length
+        );
+
+    for (const TipKResult& r : mechanical_k_results)
+    {
+        TipKResult h = r;
+
+        // Fluid pressure opens the crack, so it contributes to Mode I.
+        // Clamp negative mechanical KI so compression does not cancel the injected pressure in this demo.
+        h.K_I = std::max(0.0, r.K_I) + K_hydraulic;
+
+        out.push_back(h);
+    }
+
+    return out;
+}
+
 struct GrowthFrame
 {
-    Crack crack;
-    XFemIterationResult solve_result;
-    std::vector<TipKResult> k_results;
+    double fluid_pressure_pa = 0.0;
+
+    // Multi-crack frame. Each crack is still solved by the existing single-crack XFEM solver.
+    // This gives a practical multi-crack growth DEMO without changing levelset/enrichment DOF layout.
+    std::vector<Crack> cracks;
+    std::vector<XFemIterationResult> solve_results;
+    std::vector<std::vector<TipKResult>> k_results_per_crack;
 };
+
+static const XFemIterationResult& primarySolveResult(const GrowthFrame& frame)
+{
+    if (frame.solve_results.empty())
+    {
+        throw std::runtime_error("GrowthFrame has no solve results");
+    }
+
+    // The von Mises background is shown for the first crack solve.
+    // All crack polylines are drawn on top.
+    return frame.solve_results.front();
+}
 
 struct StressTriangleValue
 {
@@ -676,7 +950,7 @@ static std::vector<TextVertex> buildLegendTextVertices(
     const std::string title = "S: von Mises";
     const float title_width = measureTextWidthPx(font, title);
     const float title_x_px = label_x_px - 3.0f;
-    const float title_y_px = (1.0f - y1_ndc) * 0.5f * static_cast<float>(screen_h) - 80.0f;
+    const float title_y_px = (1.0f - y1_ndc) * 0.5f * static_cast<float>(screen_h) - 34.0f;
 
     appendTextPx(
         verts,
@@ -981,6 +1255,40 @@ std::vector<Vertex> makeCrackLineVertices(
                 packed_color
             }
         );
+    }
+
+    return vertices;
+}
+
+std::vector<Vertex> makeMultiCrackLineVertices(
+    const std::vector<Crack>& cracks,
+    const glm::vec4& color
+)
+{
+    std::vector<Vertex> vertices;
+    const uint32_t packed_color = packColor(color);
+
+    for (const Crack& crack : cracks)
+    {
+        for (const CrackSegment& seg : crack.indices)
+        {
+            const Eigen::Vector2d& p0 = crack.vertices[seg.v0];
+            const Eigen::Vector2d& p1 = crack.vertices[seg.v1];
+
+            vertices.push_back(
+                Vertex{
+                    glm::vec2{static_cast<float>(p0.x()), static_cast<float>(p0.y())},
+                    packed_color
+                }
+            );
+
+            vertices.push_back(
+                Vertex{
+                    glm::vec2{static_cast<float>(p1.x()), static_cast<float>(p1.y())},
+                    packed_color
+                }
+            );
+        }
     }
 
     return vertices;
@@ -1455,7 +1763,7 @@ std::vector<StressTriangleValue> buildVonMisesTriangles(
 {
     std::vector<StressTriangleValue> triangles;
 
-    const XFemIterationResult& result = frame.solve_result;
+    const XFemIterationResult& result = primarySolveResult(frame);
 
     std::vector<int> tip_element_to_index(
         mesh.elements.size(),
@@ -1726,9 +2034,24 @@ GrowthFrameVisual makeGrowthFrameVisual(
     const std::vector<Eigen::Vector2d> vertices_displaced =
         makeDisplacedVertices(
             mesh,
-            frame.solve_result,
+            primarySolveResult(frame),
             scale
         );
+
+    visual.quads.reserve(mesh.elements.size());
+
+    for (const auto& element : mesh.elements)
+    {
+        visual.quads.push_back(
+            Quad{
+                toGlm(vertices_displaced[element[0]].cast<float>().eval()),
+                toGlm(vertices_displaced[element[1]].cast<float>().eval()),
+                toGlm(vertices_displaced[element[2]].cast<float>().eval()),
+                toGlm(vertices_displaced[element[3]].cast<float>().eval()),
+                packColor(glm::vec4(0.10f, 0.10f, 0.10f, 0.10f))
+            }
+        );
+    }
 
     visual.circles.reserve(mesh.vertices.size());
 
@@ -1746,8 +2069,8 @@ GrowthFrameVisual makeGrowthFrameVisual(
     }
 
     visual.crack_vertices =
-        makeCrackLineVertices(
-            frame.crack,
+        makeMultiCrackLineVertices(
+            frame.cracks,
             glm::vec4(0.0f, 1.0f, 1.0f, 1.0f)
         );
 
@@ -1908,26 +2231,7 @@ int main()
         }
     }
 
-    Crack crack;
-
-    std::ifstream crack_data("mesh/crack.txt");
-    if (!crack_data.is_open())
-    {
-        throw std::runtime_error("Couldn't open mesh/crack.txt");
-    }
-    double a, b;
-    while (crack_data >> a >> b)
-    {
-        crack.vertices.push_back(Eigen::Vector2d(a, b));
-    }
-    if (crack.vertices.size() < 2)
-    {
-        throw std::runtime_error("Crack must contain at least two points");
-    }
-    for (int i = 1; i < crack.vertices.size(); i++)
-    {
-        crack.indices.push_back(CrackSegment{i - 1, i});
-    }
+    std::vector<Crack> cracks = loadCracksWithFallback();
 
     std::ifstream interaction_integral_data("mesh/interaction_integral.txt");
     if (!interaction_integral_data.is_open())
@@ -1957,164 +2261,216 @@ int main()
     {
         disable_debug_output_data >> disable_debug_output;
     }
-    const double E = 70e9;        // Pa
-    constexpr double nu = 0.23;   // -
-    const double KIC = 0.75e6;    // Pa * sqrt(m)
+    // Glass-like material for hydraulic-fracture demo.
+    const double E = 70.0e9;
+    constexpr double nu = 0.23;
     const Eigen::Matrix3d D = setup_D_matrix(E, nu, true);
 
-    const int max_growth_steps = 100;
+    const HydraulicFractureParameters hydro_params =
+        loadHydraulicFractureParameters();
+
     std::vector<GrowthFrame> growth_frames;
-    growth_frames.reserve(max_growth_steps);
+    growth_frames.reserve(16);
 
-    const double da = 1.0 * std::min(wh, hh);
-
-    XFemIterationResult solve_result;
+    const int max_growth_steps = 30;
+    const double da = hydro_params.da_factor * std::min(wh, hh);
+    double last_fluid_pressure_pa = hydro_params.pressure_start;
 
     for (int growth_step = 0; growth_step < max_growth_steps; ++growth_step)
     {
         std::cout << "\n==============================\n";
-        std::cout << "CRACK GROWTH ITERATION " << growth_step << "\n";
+        std::cout << "HYDRAULIC FRACTURE ITERATION " << growth_step << "\n";
         std::cout << "==============================\n";
 
-        solve_result =
-            solveCrackIteration(
-                mesh,
-                crack,
-                w,
-                h,
-                wn,
-                hn,
-                thickness,
-                D,
-                disable_output,
-                disable_debug_output
-            );
-
-        std::vector<TipKResult> k_results =
-            computeStress<13>(
-                solve_result.enriched_elements.tip_enriched,
-                solve_result.enriched_elements.heaviside_enriched,
-                mesh,
-                solve_result.enriched_elements_triangulation.tip_enriched_triangulation,
-                solve_result.enriched_elements_triangulation.heaviside_enriched_triangulation,
-                solve_result.u,
-                solve_result.node_offset,
-                solve_result.enriched_elements.heaviside_enriched_nodes,
-                solve_result.enriched_elements.tip_enriched_nodes,
-                solve_result.level_set_fields.vertices_level_set_signs,
-                LinearTriangle::Triangle13PointRule::gauss_pts,
-                LinearTriangle::Triangle13PointRule::gauss_wts,
-                solve_result.crack_tip_1_t,
-                solve_result.crack_tip_1_n,
-                solve_result.crack_tip_2_t,
-                solve_result.crack_tip_2_n,
-                D,
-                E,
-                nu,
-                Rin,
-                Rout
-            );
-
-        growth_frames.push_back(
-            GrowthFrame{
-                crack,
-                solve_result,
-                k_results
-            }
+        const double fluid_pressure_pa = std::min(
+            hydro_params.pressure_max,
+            hydro_params.pressure_start + hydro_params.pressure_step * static_cast<double>(growth_step)
         );
+        last_fluid_pressure_pa = fluid_pressure_pa;
 
-        if (k_results.empty())
+        std::cout << "Fluid pressure = " << fluid_pressure_pa
+                  << " Pa = " << fluid_pressure_pa / 1.0e6 << " MPa\n";
+
+        GrowthFrame frame;
+        frame.fluid_pressure_pa = fluid_pressure_pa;
+        frame.cracks = cracks;
+        frame.solve_results.reserve(cracks.size());
+        frame.k_results_per_crack.reserve(cracks.size());
+
+        bool any_crack_grown = false;
+
+        for (std::size_t crack_id = 0; crack_id < cracks.size(); ++crack_id)
         {
-            std::cout << "No K results. Stop crack growth.\n";
+            std::cout << "\n--- Crack " << crack_id << " ---\n";
+
+            XFemIterationResult solve_result =
+                solveCrackIteration(
+                    mesh,
+                    cracks[crack_id],
+                    w,
+                    h,
+                    wn,
+                    hn,
+                    thickness,
+                    D,
+                    disable_output,
+                    disable_debug_output
+                );
+
+            std::vector<TipKResult> k_results =
+                computeStress<13>(
+                    solve_result.enriched_elements.tip_enriched,
+                    solve_result.enriched_elements.heaviside_enriched,
+                    mesh,
+                    solve_result.enriched_elements_triangulation.tip_enriched_triangulation,
+                    solve_result.enriched_elements_triangulation.heaviside_enriched_triangulation,
+                    solve_result.u,
+                    solve_result.node_offset,
+                    solve_result.enriched_elements.heaviside_enriched_nodes,
+                    solve_result.enriched_elements.tip_enriched_nodes,
+                    solve_result.level_set_fields.vertices_level_set_signs,
+                    LinearTriangle::Triangle13PointRule::gauss_pts,
+                    LinearTriangle::Triangle13PointRule::gauss_wts,
+                    solve_result.crack_tip_1_t,
+                    solve_result.crack_tip_1_n,
+                    solve_result.crack_tip_2_t,
+                    solve_result.crack_tip_2_n,
+                    D,
+                    E,
+                    nu,
+                    Rin,
+                    Rout
+                );
+
+            if (k_results.empty())
+            {
+                frame.solve_results.push_back(solve_result);
+                frame.k_results_per_crack.push_back(k_results);
+                std::cout << "No K results for crack " << crack_id << ". This crack will not grow.\n";
+                continue;
+            }
+
+            std::vector<TipKResult> hydraulic_k_results =
+                addHydraulicPressureToKResults(
+                    cracks[crack_id],
+                    k_results,
+                    fluid_pressure_pa,
+                    std::min(wh, hh)
+                );
+
+            frame.solve_results.push_back(solve_result);
+            frame.k_results_per_crack.push_back(hydraulic_k_results);
+
+            double max_Keq = 0.0;
+
+            for (const TipKResult& r : hydraulic_k_results)
+            {
+                const double Keq =
+                    computeEquivalentK(r.K_I, r.K_II);
+
+                std::cout << "tip = " << r.tip_index
+                          << ", KI_total = " << r.K_I
+                          << ", KII = " << r.K_II
+                          << ", Keq = " << Keq
+                          << ", KIC = " << hydro_params.KIC
+                          << "\n";
+
+                max_Keq =
+                    std::max(max_Keq, Keq);
+            }
+
+            const bool grown =
+                growCrackOneStep(
+                    cracks[crack_id],
+                    hydraulic_k_results,
+                    hydro_params.KIC,
+                    da,
+                    w,
+                    h
+                );
+
+            any_crack_grown = any_crack_grown || grown;
+        }
+
+        growth_frames.push_back(std::move(frame));
+
+        if (!any_crack_grown)
+        {
+            std::cout << "No cracks grew at this pressure. Stop hydraulic fracture growth.\n";
             break;
         }
 
-        double max_Keq = 0.0;
-
-        for (const TipKResult& r : k_results)
-        {
-            const double Keq =
-                computeEquivalentK(r.K_I, r.K_II);
-
-            max_Keq =
-                std::max(max_Keq, Keq);
-        }
-
-
-        const bool grown =
-            growCrackOneStep(
-                crack,
-                k_results,
-                KIC,
-                da,
-                w,
-                h
-            );
-
-        if (!grown)
-        {
-            std::cout << "Crack growth finished.\n";
-            break;
-        }
-
-        saveCrackToFile(
-            crack,
-            "mesh/crack_iteration_" + std::to_string(growth_step + 1) + ".txt"
+        saveCracksToFile(
+            cracks,
+            "mesh/cracks_iteration_" + std::to_string(growth_step + 1) + ".txt"
         );
     }
 
-    // Важно: добавляем последний кадр уже ПОСЛЕ последнего успешного роста,
-    // чтобы финальное положение трещины тоже можно было посмотреть стрелками.
+    // Add final frame after the last successful growth.
     if (!growth_frames.empty())
     {
-        std::cout << "\nResolving final crack frame...\n";
+        std::cout << "\nResolving final multi-crack frame...\n";
 
-        solve_result =
-            solveCrackIteration(
-                mesh,
-                crack,
-                w,
-                h,
-                wn,
-                hn,
-                thickness,
-                D,
-                disable_output,
-                disable_debug_output
-            );
+        GrowthFrame final_frame;
+        final_frame.fluid_pressure_pa = last_fluid_pressure_pa;
+        final_frame.cracks = cracks;
+        final_frame.solve_results.reserve(cracks.size());
+        final_frame.k_results_per_crack.reserve(cracks.size());
 
-        std::vector<TipKResult> final_k_results =
-            computeStress<13>(
-                solve_result.enriched_elements.tip_enriched,
-                solve_result.enriched_elements.heaviside_enriched,
-                mesh,
-                solve_result.enriched_elements_triangulation.tip_enriched_triangulation,
-                solve_result.enriched_elements_triangulation.heaviside_enriched_triangulation,
-                solve_result.u,
-                solve_result.node_offset,
-                solve_result.enriched_elements.heaviside_enriched_nodes,
-                solve_result.enriched_elements.tip_enriched_nodes,
-                solve_result.level_set_fields.vertices_level_set_signs,
-                LinearTriangle::Triangle13PointRule::gauss_pts,
-                LinearTriangle::Triangle13PointRule::gauss_wts,
-                solve_result.crack_tip_1_t,
-                solve_result.crack_tip_1_n,
-                solve_result.crack_tip_2_t,
-                solve_result.crack_tip_2_n,
-                D,
-                E,
-                nu,
-                Rin,
-                Rout
-            );
+        for (std::size_t crack_id = 0; crack_id < cracks.size(); ++crack_id)
+        {
+            XFemIterationResult solve_result =
+                solveCrackIteration(
+                    mesh,
+                    cracks[crack_id],
+                    w,
+                    h,
+                    wn,
+                    hn,
+                    thickness,
+                    D,
+                    disable_output,
+                    disable_debug_output
+                );
 
-        growth_frames.push_back(
-            GrowthFrame{
-                crack,
-                solve_result,
-                final_k_results
-            }
-        );
+            std::vector<TipKResult> k_results =
+                computeStress<13>(
+                    solve_result.enriched_elements.tip_enriched,
+                    solve_result.enriched_elements.heaviside_enriched,
+                    mesh,
+                    solve_result.enriched_elements_triangulation.tip_enriched_triangulation,
+                    solve_result.enriched_elements_triangulation.heaviside_enriched_triangulation,
+                    solve_result.u,
+                    solve_result.node_offset,
+                    solve_result.enriched_elements.heaviside_enriched_nodes,
+                    solve_result.enriched_elements.tip_enriched_nodes,
+                    solve_result.level_set_fields.vertices_level_set_signs,
+                    LinearTriangle::Triangle13PointRule::gauss_pts,
+                    LinearTriangle::Triangle13PointRule::gauss_wts,
+                    solve_result.crack_tip_1_t,
+                    solve_result.crack_tip_1_n,
+                    solve_result.crack_tip_2_t,
+                    solve_result.crack_tip_2_n,
+                    D,
+                    E,
+                    nu,
+                    Rin,
+                    Rout
+                );
+
+            std::vector<TipKResult> hydraulic_k_results =
+                addHydraulicPressureToKResults(
+                    cracks[crack_id],
+                    k_results,
+                    last_fluid_pressure_pa,
+                    std::min(wh, hh)
+                );
+
+            final_frame.solve_results.push_back(solve_result);
+            final_frame.k_results_per_crack.push_back(hydraulic_k_results);
+        }
+
+        growth_frames.push_back(std::move(final_frame));
     }
 
     if (growth_frames.empty())
@@ -2122,7 +2478,7 @@ int main()
         throw std::runtime_error("No growth frames were created");
     }
 
-    saveCrackToFile(crack, "mesh/crack_final.txt");
+    saveCracksToFile(cracks, "mesh/cracks_final.txt");
 
     std::vector<GrowthFrameVisual> growth_visuals;
     growth_visuals.reserve(growth_frames.size());
@@ -2144,7 +2500,7 @@ int main()
     const std::vector<Eigen::Vector2d> first_displaced_vertices =
         makeDisplacedVertices(
             mesh,
-            growth_frames.front().solve_result,
+            primarySolveResult(growth_frames.front()),
             scale
         );
 
@@ -2172,7 +2528,7 @@ int main()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
-    window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "XFEM crack growth frames", NULL, NULL);
+    window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "XFEM hydraulic fracturing demo", NULL, NULL);
 
     if (!window)
     {
@@ -2198,8 +2554,8 @@ int main()
     std::cout << "Current working directory: " << cwd << std::endl;
 
     std::cout << "\nControls:\n";
-    std::cout << "  RIGHT / D : next crack-growth frame\n";
-    std::cout << "  LEFT  / A : previous crack-growth frame\n";
+    std::cout << "  RIGHT / D : next hydraulic-fracture frame\n";
+    std::cout << "  LEFT  / A : previous hydraulic-fracture frame\n";
     std::cout << "  SPACE     : play / pause\n";
     std::cout << "  R         : restart to frame 0\n";
     std::cout << "  ESC       : close window\n\n";
@@ -2381,7 +2737,7 @@ int main()
 
     int current_growth_frame = 0;
     bool play_animation = false;
-    const double frame_duration = 0.10;
+    const double frame_duration = 0.65;
     double last_auto_switch_time = glfwGetTime();
     bool frame_dirty = true;
 
@@ -2474,9 +2830,10 @@ int main()
             std::snprintf(
                 title,
                 sizeof(title),
-                "XFEM von Mises | frame %d / %d | min %.3e | max %.3e | Left/Right switch, Space play",
+                "XFEM hydraulic fracture | frame %d / %d | p %.3f MPa | vm %.3e .. %.3e | Left/Right, Space",
                 current_growth_frame + 1,
                 static_cast<int>(growth_visuals.size()),
+                growth_frames[current_growth_frame].fluid_pressure_pa / 1.0e6,
                 vm_scale.vmin,
                 vm_scale.vmax
             );
@@ -2508,15 +2865,20 @@ int main()
         const GrowthFrameVisual& visual =
             growth_visuals[current_growth_frame];
 
-        quad_shader.use();
-        quad_shader.setMat4("mvp", MVP);
-        glBindVertexArray(quadVAO);
-        glDrawArraysInstanced(
-            GL_TRIANGLE_FAN,
-            0,
-            4,
-            static_cast<GLsizei>(visual.quads.size())
-        );
+        // Background element fill is disabled so it does not hide the von Mises field.
+        // Enable this block only if you want a faint mesh backing.
+        if (false)
+        {
+            quad_shader.use();
+            quad_shader.setMat4("mvp", MVP);
+            glBindVertexArray(quadVAO);
+            glDrawArraysInstanced(
+                GL_TRIANGLE_FAN,
+                0,
+                4,
+                static_cast<GLsizei>(visual.quads.size())
+            );
+        }
 
         if (!visual.von_mises_vertices.empty())
         {
@@ -2550,7 +2912,7 @@ int main()
             glBindVertexArray(chainVAO);
             glLineWidth(3.0f);
             glDrawArrays(
-                GL_LINE_STRIP,
+                GL_LINES,
                 0,
                 static_cast<GLsizei>(visual.crack_vertices.size())
             );

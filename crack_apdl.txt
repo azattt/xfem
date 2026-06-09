@@ -45,7 +45,7 @@ FITEM,2,4
 SFL,P51X,PRES,-sigma,   
 FLST,2,1,5,ORDE,1   
 FITEM,2,1   
-*SET,mesh_size,0.0005 
+*SET,mesh_size,0.0005
 FLST,2,1,5,ORDE,1   
 FITEM,2,1   
 AESIZE,P51X,mesh_size,    
