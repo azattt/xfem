@@ -7,11 +7,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # add_definitions(-DEIGEN_NO_DEBUG -DEIGEN_MPL2_ONLY -DEIGEN_NO_STATIC_ASSERT)
 
-find_program(NINJA ninja)
-if(NINJA)
-  set(CMAKE_GENERATOR "Ninja" CACHE INTERNAL "")
-endif()
-
 add_library(xfem_core STATIC
   # compute.cpp
   glad.c
@@ -101,7 +96,7 @@ add_dependencies(xfem copy_assets copy_mesh)
 # set(xfem BUILD_TYPE Release)
 
 if(MSVC)
-  target_compile_options(xfem PRIVATE /W4 /Od /arch:AVX2) #  mb just AVX /O2 /WX  -fsanitize=address
+  target_compile_options(xfem PRIVATE /W4 /arch:AVX2) # mb just AVX /O2 /WX  -fsanitize=address
 else()
   target_compile_options(xfem PRIVATE -Wall -Wextra -Wpedantic) #   -Werror maybe -mssse3 or -march=native
 endif()

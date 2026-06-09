@@ -1,6 +1,99 @@
-for a = 0.3 W = 1
+for a = 0.3 W = 1 mesh_size 5e-3
 KI1                               17132.2282                  SCALAR
  KI2                               17797.2570                  SCALAR
  KI3                               17831.8159                  SCALAR
  KI4                               17838.4511                  SCALAR
  KI5                               17840.8163                  SCALAR
+
+
+ ABBREVIATION STATUS-
+
+  ABBREV    STRING
+  SAVE_DB   SAVE
+  RESUM_DB  RESUME
+  QUIT      Fnc_/EXIT
+  POWRGRPH  Fnc_/GRAPHICS
+
+ PARAMETER STATUS-           (     20 PARAMETERS DEFINED)
+                  (INCLUDING        3 INTERNAL PARAMETERS)
+
+ NAME                              VALUE                        TYPE  DIMENSIONS
+ A                                0.300000000                  SCALAR
+ KI1                               17049.3119                  SCALAR
+ KI2                               17953.1979                  SCALAR
+ KI3                               17948.4783                  SCALAR
+ KI4                               17947.6376                  SCALAR
+ KI5                               17947.2006                  SCALAR
+ KII1                              0.00000000                  SCALAR
+ KII2                              0.00000000                  SCALAR
+ KII3                              0.00000000                  SCALAR
+ KII4                              0.00000000                  SCALAR
+ KII5                              0.00000000                  SCALAR
+ MESH_SIZE                        5.000000000E-004             SCALAR
+ SIGMA                             10000.0000                  SCALAR
+ T                                0.100000000                  SCALAR
+ TIP_FROM_CINT                     2.00000000                  SCALAR
+ TIP_NODE                          2.00000000                  SCALAR
+ W                                 1.00000000                  SCALAR
+
+
+for a = 0.3 b = 0.7 W = 1
+ ABBREVIATION STATUS-
+
+  ABBREV    STRING
+  SAVE_DB   SAVE
+  RESUM_DB  RESUME
+  QUIT      Fnc_/EXIT
+  POWRGRPH  Fnc_/GRAPHICS
+
+ PARAMETER STATUS-           (     42 PARAMETERS DEFINED)
+                  (INCLUDING        3 INTERNAL PARAMETERS)
+
+ NAME                              VALUE                        TYPE  DIMENSIONS
+ A                                0.300000000                  SCALAR
+ B                                0.700000000                  SCALAR
+ H                                0.500000000                  SCALAR
+ KI1_1                             9210.81469                  SCALAR
+ KI1_2                             9582.05161                  SCALAR
+ KI1_3                             9601.07394                  SCALAR
+ KI1_4                             9604.88109                  SCALAR
+ KI1_5                             9606.28991                  SCALAR
+ KI1_AVG                           9604.08165                  SCALAR
+ KI2_1                             9210.81469                  SCALAR
+ KI2_2                             9582.05161                  SCALAR
+ KI2_3                             9601.07394                  SCALAR
+ KI2_4                             9604.88109                  SCALAR
+ KI2_5                             9606.28991                  SCALAR
+ KI2_AVG                           9604.08165                  SCALAR
+ KII1_1                            0.00000000                  SCALAR
+ KII1_2                            0.00000000                  SCALAR
+ KII1_3                            0.00000000                  SCALAR
+ KII1_4                            0.00000000                  SCALAR
+ KII1_5                            0.00000000                  SCALAR
+ KII1_AVG                          0.00000000                  SCALAR
+
+ NAME                              VALUE                        TYPE  DIMENSIONS
+ KII2_1                            0.00000000                  SCALAR
+ KII2_2                            0.00000000                  SCALAR
+ KII2_3                            0.00000000                  SCALAR
+ KII2_4                            0.00000000                  SCALAR
+ KII2_5                            0.00000000                  SCALAR
+ KII2_AVG                          0.00000000                  SCALAR
+ MESH_SIZE                        5.000000000E-003             SCALAR
+ SIGMA                             10000.0000                  SCALAR
+ T                                0.100000000                  SCALAR
+ TIP1_FROM_CINT                    2.00000000                  SCALAR
+ TIP2_FROM_CINT                    62.0000000                  SCALAR
+ TIP_NODE_1                        2.00000000                  SCALAR
+ TIP_NODE_2                        62.0000000                  SCALAR
+ W                                 1.00000000                  SCALAR
+ X_TIP1                           0.300000000                  SCALAR
+ X_TIP2                           0.700000000                  SCALAR
+ Y_TIP1                            0.00000000                  SCALAR
+ Y_TIP2                            0.00000000                  SCALAR
+
+1 1 500 500 0.1 1000000
+0.0 0.5 0.3 0.5
+3 6
+Rin_h, Rout_h: 0.00601202 0.012024
+tip_index = 2, used_elements = 141, K_I = 17971.6, K_II = -2.11954, |KII/KI| = 0.000117938

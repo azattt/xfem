@@ -6,110 +6,6 @@
 
 #include "gui.h"
 
-// using namespace fcpw;
-
-// // Helper: convert quad mesh to line segments (each quad → 4 edges)
-// void convertQuadsToLineSegments(
-//     const std::vector<Eigen::Vector<double, 2>>& vertices,
-//     const std::vector<std::array<int, 4>>& quads,
-//     std::vector<Eigen::Vector<double, 2>>& outPositions,      // flattened vertex list
-//     std::vector<Vector2i>& outIndices) {       // edge indices
-//     outPositions = vertices; // keep original vertices
-//     for (const auto& q : quads) {
-//         // add 4 edges per quad (counter-clockwise)
-//         outIndices.push_back(Vector2i(q[0], q[1]));
-//         outIndices.push_back(Vector2i(q[1], q[2]));
-//         outIndices.push_back(Vector2i(q[2], q[3]));
-//         outIndices.push_back(Vector2i(q[3], q[0]));
-//     }
-// }
-
-void find_enriched_elements(const QuadMesh& quad_mesh, const Crack& crack){
-    /*
-    const unsigned int nTris = quad_mesh.elements.size()*2;
-    
-    std::vector<fcpw::Vector3i> triangle_indices;
-    triangle_indices.reserve(quad_mesh.elements.size()*6);
-    for (const std::array<int, 4>& quad: quad_mesh.elements){
-        // bboxes.push_back(BB)
-        triangle_indices.push_back(fcpw::Vector3i(quad[0], quad[1], quad[2]));
-        triangle_indices.push_back(fcpw::Vector3i(quad[0], quad[2], quad[3]));
-    }
-    
-
-//  ---- 2. Convert quads to line segments ----
-    std::vector<Eigen::Vector<double, 2>> lineVertices;
-    std::vector<Vector2i> lineIndices;
-    convertQuadsToLineSegments(quad_mesh.vertices, quad_mesh.elements, lineVertices, lineIndices);
-
-    // ---- 3. Setup FCPW scene and build BVH ----
-    Scene<2> scene;
-    scene.setObjectCount(1);
-    scene.setObjectVertices(lineVertices, 0);
-    scene.setObjectLineSegments(lineIndices, 0);
-    // scene.setObjectVertices(quad_mesh.vertices, 0);
-    // scene.setObjectTriangles(triangle_indices, 0);
-    // scene.setObjectLineSegments(lineIndices, 0);
-    // std::vector<Vector<3>> vertices = {{-1.0f, -1.0f, 0.0f}, {1.0f, -1.0f, 0.0f}, {1.0f, 1.0f, 0.0f}};
-    // std::vector<Vector3i> indices = {{0, 1, 2}};
-    // scene.setObjectVertices(vertices, 0);
-    // scene.setObjectTriangles(indices, 0);
-    AggregateType aggType = AggregateType::Bvh_SurfaceArea;
-    bool vectorized = true;               // use Enoki vectorization
-    bool printStats = true;
-    bool reduceMemory = false;
-    scene.build(aggType, vectorized, printStats, reduceMemory);
-
-    // ---- 4. Define polyline (example: crossing the square) ----
-    std::vector<Eigen::Vector<double, 2>> polyline = {
-        Eigen::Vector<double, 2>(0.001f, 0.5f),  // start left of square
-        Eigen::Vector<double, 2>(0.5f, 0.5f)   // end right of square
-    };
-
-    // ---- 5. Intersect each polyline segment ----
-    bool anyHit = false;
-    const float maxDist = 1000.0f;
-
-    for (size_t i = 0; i + 1 < polyline.size(); ++i) {
-        const Eigen::Vector<double, 2>& p0 = polyline[i];
-        const Eigen::Vector<double, 2>& p1 = polyline[i + 1];
-        Eigen::Vector<double, 2> dir = p1 - p0;
-        const float segLen = dir.norm();
-        if (segLen == 0.0f) continue;
-        dir = dir / segLen;
-
-        // Create ray
-        Ray<2> ray(p0, dir, segLen);
-
-        int nHit;
-        // Perform intersection
-        std::vector<Interaction<2>> interactions;
-        nHit = scene.intersect(ray, interactions, false, true); // returns true if any hit
-
-        if (nHit) {
-            anyHit = true;
-            for (const auto& inter : interactions) {
-                int quadIndex = inter.primitiveIndex;
-                float t = inter.d;
-                Eigen::Vector<double, 2> point = inter.p;
-                std::cout << "  Hit at t=" << t << ", quad=" << quadIndex  / 4
-                        << " at (" << point[0] << "," << point[1] << ")\n";
-            }
-        }
-    }
-
-    if (!anyHit)
-        std::cout << "No intersections found.\n";
-
-    // Interaction<2> interaction;
-    // scene.findClosestPoint(fcpw::Vector3(0.8f, 0.8f), interaction);
-    
-    return std::vector<HeavisideEnriched>();
-    */
-}
-
-
-
 LevelSetFields compute_level_set_fields(const QuadMesh& quad_mesh, const Crack& crack){
     std::vector<LevelSetSign> vertices_level_set_signs;
     std::vector<double> level_set_1_signed_dist;
@@ -323,6 +219,102 @@ bool inverseMapping(const Eigen::Vector2d& point,
     return false; // not converged
 }
 
+static double cross2d(const Eigen::Vector2d& a, const Eigen::Vector2d& b)
+{
+    return a.x() * b.y() - a.y() * b.x();
+}
+
+static bool segmentIntersection(
+    const Eigen::Vector2d& P,
+    const Eigen::Vector2d& Q,
+    const Eigen::Vector2d& A,
+    const Eigen::Vector2d& B,
+    double& s,
+    double& t
+)
+{
+    // P + s * (Q - P) = A + t * (B - A)
+    const Eigen::Vector2d r = Q - P;
+    const Eigen::Vector2d e = B - A;
+
+    const double denom = cross2d(r, e);
+
+    if (std::abs(denom) < 1e-14) {
+        return false;
+    }
+
+    const Eigen::Vector2d AP = A - P;
+
+    s = cross2d(AP, e) / denom;
+    t = cross2d(AP, r) / denom;
+
+    const double eps = 1e-12;
+
+    return s >= -eps && s <= 1.0 + eps &&
+           t >= -eps && t <= 1.0 + eps;
+}
+
+static bool findTipElementExitPoint(
+    const std::array<int, 4>& element,
+    const QuadMesh& quad_mesh,
+    const Eigen::Vector2d& tip_point,
+    const Eigen::Vector2d& next_crack_point,
+    Eigen::Vector2d& intersection_point_local_coords,
+    unsigned char& intersected_edge
+)
+{
+    const std::array<Eigen::Vector2d, 4> local_edge_points = {
+        Eigen::Vector2d{-1.0, -1.0},
+        Eigen::Vector2d{ 1.0, -1.0},
+        Eigen::Vector2d{ 1.0,  1.0},
+        Eigen::Vector2d{-1.0,  1.0}
+    };
+
+    int found_count = 0;
+
+    for (int edge = 0; edge < 4; ++edge) {
+        const int n0 = element[edge];
+        const int n1 = element[(edge + 1) % 4];
+
+        const Eigen::Vector2d A = quad_mesh.vertices[n0];
+        const Eigen::Vector2d B = quad_mesh.vertices[n1];
+
+        double s = 0.0;
+        double t = 0.0;
+
+        const bool ok = segmentIntersection(
+            tip_point,
+            next_crack_point,
+            A,
+            B,
+            s,
+            t
+        );
+
+        if (!ok) {
+            continue;
+        }
+
+        // s = 0 means exactly at tip point.
+        // We need the exit point away from the tip.
+        if (s < 1e-10) {
+            continue;
+        }
+
+        const Eigen::Vector2d local_A = local_edge_points[edge];
+        const Eigen::Vector2d local_B = local_edge_points[(edge + 1) % 4];
+
+        intersection_point_local_coords =
+            local_A + t * (local_B - local_A);
+
+        intersected_edge = static_cast<unsigned char>(edge);
+
+        ++found_count;
+    }
+
+    return found_count == 1;
+}
+
 EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMesh& quad_mesh, const Crack& crack, const LevelSetFields& level_set_fields){
     std::vector<HeavisideEnriched> heaviside_enriched;
     std::vector<TipEnriched> tip_enriched;
@@ -355,122 +347,116 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
             continue;
         }
         if (tip1){
-            if (tip_1_index != -1) throw std::runtime_error("tip_1_index != -1");
+            if (tip_1_index != -1) {
+                throw std::runtime_error("tip_1_index != -1");
+            }
+
             tip_1_index = i;
-            Eigen::Vector<double, 2> intersection_point_local_coords;
-            int intersected_edge = -1;
-            Eigen::Vector<double, 2> tip_local_coords;
-            bool found = false;
-            double min_dist = std::abs(level_set_fields.level_set_1_signed_dist[element[0]]);
-            int min_node = 0;
-            for (int node = 0; node < 4; node++){
-                if (level_set_fields.level_set_1_signed_dist[element[node]] < min_dist){
-                    min_node = node;
-                    min_dist = std::abs(level_set_fields.level_set_1_signed_dist[element[node]]);
+
+            Eigen::Vector2d intersection_point_local_coords;
+            Eigen::Vector2d tip_local_coords;
+            unsigned char intersected_edge = 0;
+
+            const Eigen::Vector2d& tip_point =
+                crack.vertices[crack.indices[0].v0];
+
+            const Eigen::Vector2d& next_crack_point =
+                crack.vertices[crack.indices[0].v1];
+
+            const bool found_exit = findTipElementExitPoint(
+                element,
+                quad_mesh,
+                tip_point,
+                next_crack_point,
+                intersection_point_local_coords,
+                intersected_edge
+            );
+
+            if (!found_exit) {
+                throw std::runtime_error("Cannot find unique exit edge for tip 1 element");
+            }
+
+            const bool ok_inverse = inverseMapping(
+                tip_point,
+                {quad_mesh.vertices[element[0]],
+                quad_mesh.vertices[element[1]],
+                quad_mesh.vertices[element[2]],
+                quad_mesh.vertices[element[3]]},
+                tip_local_coords
+            );
+
+            if (!ok_inverse) {
+                throw std::runtime_error("inverseMapping failed for tip 1");
+            }
+
+            tip_enriched.push_back(
+                TipEnriched{
+                    i,
+                    intersection_point_local_coords,
+                    tip_local_coords,
+                    intersected_edge,
+                    1
                 }
-            }
-            int min_edge = 0;
-            if (level_set_fields.vertices_level_set_signs[element[min_node]].sign > 0){
-                min_edge = (min_node + 3 ) % 4;
-            }else{
-                min_edge = min_node;
-            }
-            int found_edge = -1;
-            for (int edge = 0; edge < 4; edge++){
-                if (level_set_fields.vertices_level_set_signs[element[edge]].tip == 1 && level_set_fields.vertices_level_set_signs[element[edge]].tip == level_set_fields.vertices_level_set_signs[element[(edge + 1)%4]].tip
-                && level_set_fields.vertices_level_set_signs[element[edge]].sign*level_set_fields.vertices_level_set_signs[element[(edge+1)%4]].sign < 0
-                ){
-                    const int opposite_edge = (edge + 2)%4;
-                    if (!(level_set_fields.vertices_level_set_signs[element[opposite_edge]].sign*level_set_fields.vertices_level_set_signs[element[(opposite_edge+1)%4]].sign < 0)){
-                        continue;         
-                    }
-                    if (found_edge != -1){
-                        found_edge = -1;
-                        break;
-                    }
-                    found_edge = edge;
-                }
-            }
-            // try another criteria
-            if (found_edge == -1){
-                found_edge = min_edge;
-            }
-            if (found_edge != -1){
-                const int opposite_edge = (found_edge + 2)%4;
-                if (!(level_set_fields.vertices_level_set_signs[element[opposite_edge]].sign*level_set_fields.vertices_level_set_signs[element[(opposite_edge+1)%4]].sign < 0)){
-                    continue;         
-                }
-                if (found) throw std::runtime_error("already found");
-                const double coord = (level_set_fields.level_set_1_signed_dist[element[opposite_edge]]+level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]])/(level_set_fields.level_set_1_signed_dist[element[opposite_edge]]-level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]]); 
-                intersection_point_local_coords = Eigen::Vector<double, 2>{
-                    (opposite_edge == 0)*coord+(opposite_edge == 1)*(1)+(opposite_edge == 2)*(-coord)+(opposite_edge == 3)*(-1),
-                    (opposite_edge == 1)*coord+(opposite_edge == 2)*(1)+(opposite_edge == 3)*(-coord)+(opposite_edge == 0)*(-1)
-                };
-                inverseMapping(crack_tip_1_vertex, {quad_mesh.vertices[element[0]], quad_mesh.vertices[element[1]], quad_mesh.vertices[element[2]], quad_mesh.vertices[element[3]]}, tip_local_coords);
-                intersected_edge = opposite_edge;
-                found = true;
-            }
-            if (!found) throw std::runtime_error("not found");
-            tip_enriched.push_back(TipEnriched{i, intersection_point_local_coords, tip_local_coords,  static_cast<unsigned char>(intersected_edge), 1});
-            for (const int node: element){
+            );
+
+            for (const int node : element) {
                 tip_enriched_nodes[node] = true;
             }
         }
         if (tip2){
-            if (tip_2_index != -1) throw std::runtime_error("tip_2_index != -1");
+            if (tip_2_index != -1) {
+                throw std::runtime_error("tip_2_index != -1");
+            }
+
             tip_2_index = i;
-            Eigen::Vector<double, 2> intersection_point_local_coords;
-            int intersected_edge = -1;
-            Eigen::Vector<double, 2> tip_local_coords;
-            bool found = false;
-            double min_dist = std::abs(level_set_fields.level_set_1_signed_dist[element[0]]);
-            int min_node = 0;
-            for (int node = 0; node < 4; node++){
-                if (level_set_fields.level_set_1_signed_dist[element[node]] < min_dist){
-                    min_node = node;
-                    min_dist = std::abs(level_set_fields.level_set_1_signed_dist[element[node]]);
+
+            Eigen::Vector2d intersection_point_local_coords;
+            Eigen::Vector2d tip_local_coords;
+            unsigned char intersected_edge = 0;
+
+            const Eigen::Vector2d& previous_crack_point =
+                crack.vertices[crack.indices[crack.indices.size()-1].v0];
+
+            const Eigen::Vector2d& tip_point =
+                crack.vertices[crack.indices[crack.indices.size()-1].v1];
+
+            const bool found_exit = findTipElementExitPoint(
+                element,
+                quad_mesh,
+                tip_point,
+                previous_crack_point,
+                intersection_point_local_coords,
+                intersected_edge
+            );
+
+            if (!found_exit) {
+                throw std::runtime_error("Cannot find unique exit edge for tip 1 element");
+            }
+
+            const bool ok_inverse = inverseMapping(
+                tip_point,
+                {quad_mesh.vertices[element[0]],
+                quad_mesh.vertices[element[1]],
+                quad_mesh.vertices[element[2]],
+                quad_mesh.vertices[element[3]]},
+                tip_local_coords
+            );
+
+            if (!ok_inverse) {
+                throw std::runtime_error("inverseMapping failed for tip 2");
+            }
+
+            tip_enriched.push_back(
+                TipEnriched{
+                    i,
+                    intersection_point_local_coords,
+                    tip_local_coords,
+                    intersected_edge,
+                    2
                 }
-            }
-            int min_edge = 0;
-            if (level_set_fields.vertices_level_set_signs[element[min_node]].sign > 0){
-                min_edge = (min_node + 3 ) % 4;
-            }else{
-                min_edge = min_node;
-            }
-            int found_edge = -1;
-            for (int edge = 0; edge < 4; edge++){
-                if (level_set_fields.vertices_level_set_signs[element[edge]].tip == 1 && level_set_fields.vertices_level_set_signs[element[edge]].tip == level_set_fields.vertices_level_set_signs[element[(edge + 1)%4]].tip
-                && level_set_fields.vertices_level_set_signs[element[edge]].sign*level_set_fields.vertices_level_set_signs[element[(edge+1)%4]].sign < 0
-                ){
-                    const int opposite_edge = (edge + 2)%4;
-                    if (!(level_set_fields.vertices_level_set_signs[element[opposite_edge]].sign*level_set_fields.vertices_level_set_signs[element[(opposite_edge+1)%4]].sign < 0)){
-                        continue;         
-                    }
-                    if (found_edge != -1){
-                        found_edge = -1;
-                        break;
-                    }
-                    found_edge = edge;
-                }
-            }
-            // try another criteria
-            if (found_edge == -1){
-                found_edge = min_edge;
-            }
-            if (found_edge != -1){
-                const int opposite_edge = (found_edge + 2)%4;
-                const double coord = (level_set_fields.level_set_1_signed_dist[element[opposite_edge]]+level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]])/(level_set_fields.level_set_1_signed_dist[element[opposite_edge]]-level_set_fields.level_set_1_signed_dist[element[(opposite_edge+1)%4]]); 
-                intersection_point_local_coords = Eigen::Vector<double, 2>{
-                    (opposite_edge == 0)*coord+(opposite_edge == 1)*(1)+(opposite_edge == 2)*(-coord)+(opposite_edge == 3)*(-1),
-                    (opposite_edge == 1)*coord+(opposite_edge == 2)*(1)+(opposite_edge == 3)*(-coord)+(opposite_edge == 0)*(-1)
-                };
-                inverseMapping(crack_tip_2_vertex, {quad_mesh.vertices[element[0]], quad_mesh.vertices[element[1]], quad_mesh.vertices[element[2]], quad_mesh.vertices[element[3]]}, tip_local_coords);
-                found = true;
-                intersected_edge = opposite_edge;
-            }
-            if (!found) throw std::runtime_error("not found");
-            tip_enriched.push_back(TipEnriched{i, intersection_point_local_coords, tip_local_coords, static_cast<unsigned char>(intersected_edge), 2});
-            for (const int node: element){
+            );
+
+            for (const int node : element) {
                 tip_enriched_nodes[node] = true;
             }
         }

@@ -1,0 +1,239 @@
+FINISH
+/CLEAR,NOSTART
+
+/PREP7
+
+! ============================================================
+! CENTRAL CRACK IN HALF MODEL
+! FEM crack with two crack tips: x = a and x = b
+! CINT is defined through CENC with explicit extension vectors
+! ============================================================
+
+ET,1,PLANE182
+KEYOPT,1,3,3
+
+*SET,t,0.1
+R,1,t
+
+MPTEMP,,,,,,,,
+MPTEMP,1,0
+MPDATA,EX,1,,2e11
+MPDATA,PRXY,1,,0.3
+
+*SET,a,0.3
+*SET,b,0.7
+*SET,W,1
+*SET,H,0.5
+*SET,sigma,10000
+*SET,mesh_size,0.005
+
+! ------------------------------------------------------------
+! Geometry
+! ------------------------------------------------------------
+
+K,1,0,0,0
+K,2,a,0,0
+K,3,b,0,0
+K,4,W,0,0
+K,5,W,H,0
+K,6,0,H,0
+
+A,1,2,3,4,5,6
+
+! Lines:
+! LINE 1: 0 -> a      symmetry, UY = 0
+! LINE 2: a -> b      crack surface, FREE
+! LINE 3: b -> W      symmetry, UY = 0
+! LINE 4: right side
+! LINE 5: top load
+! LINE 6: left side
+
+! ------------------------------------------------------------
+! Boundary conditions on solid model
+! ------------------------------------------------------------
+
+DL,1,,UY,0
+DL,3,,UY,0
+
+SFL,5,PRES,-sigma
+
+! ------------------------------------------------------------
+! Mesh
+! ------------------------------------------------------------
+
+AESIZE,1,mesh_size
+ASEL,S,AREA,,1
+
+TYPE,1
+MAT,1
+REAL,1
+
+MSHAPE,0,2D
+MSHKEY,1
+
+! Mapped mesh.
+! Use four corners of the equivalent rectangle:
+! bottom-left = KP1
+! bottom-right = KP4
+! top-right = KP5
+! top-left = KP6
+AMAP,1,1,4,5,6
+
+ALLSEL,ALL
+SBCTRAN
+
+! ------------------------------------------------------------
+! Remove rigid body motion in X
+! Do NOT fix the crack face.
+! Use node on symmetry line outside crack.
+! ------------------------------------------------------------
+
+NSEL,S,LOC,X,0
+NSEL,R,LOC,Y,0
+D,ALL,UX,0
+ALLSEL,ALL
+
+! ============================================================
+! Crack tip 1: left tip, x = a, y = 0
+! ============================================================
+
+NSEL,S,LOC,X,a
+NSEL,R,LOC,Y,0
+*GET,tip_node_1,NODE,0,NUM,MIN
+CM,CRACK_EXT_CM_1,NODE
+ALLSEL,ALL
+
+! Check coordinates of left crack tip
+*GET,x_tip1,NODE,tip_node_1,LOC,X
+*GET,y_tip1,NODE,tip_node_1,LOC,Y
+
+! ============================================================
+! Crack tip 2: right tip, x = b, y = 0
+! ============================================================
+
+NSEL,S,LOC,X,b
+NSEL,R,LOC,Y,0
+*GET,tip_node_2,NODE,0,NUM,MIN
+CM,CRACK_EXT_CM_2,NODE
+ALLSEL,ALL
+
+! Check coordinates of right crack tip
+*GET,x_tip2,NODE,tip_node_2,LOC,X
+*GET,y_tip2,NODE,tip_node_2,LOC,Y
+
+! ============================================================
+! CINT definitions using CENC
+! ============================================================
+
+! ------------------------------------------------------------
+! CINT 1: left crack tip
+! Crack extension direction = -X
+! ------------------------------------------------------------
+
+CINT,NEW,1
+CINT,TYPE,SIFS
+CINT,CENC,CRACK_EXT_CM_1,tip_node_1,,,-1,0,0
+CINT,NCON,5
+CINT,SYMM,ON
+
+! ------------------------------------------------------------
+! CINT 2: right crack tip
+! Crack extension direction = +X
+! ------------------------------------------------------------
+
+CINT,NEW,2
+CINT,TYPE,SIFS
+CINT,CENC,CRACK_EXT_CM_2,tip_node_2,,,1,0,0
+CINT,NCON,5
+CINT,SYMM,ON
+
+! ------------------------------------------------------------
+! Plot/list crack-tip coordinate systems for checking
+! White axis should be:
+! CINT 1 -> -X
+! CINT 2 -> +X
+! ------------------------------------------------------------
+
+CINT,PLOT,1,1
+CINT,PLOT,2,1
+CINT,LIST,1
+CINT,LIST,2
+
+FINISH
+
+! ============================================================
+! Solution
+! ============================================================
+
+/SOLU
+ANTYPE,STATIC
+SOLVE
+FINISH
+
+! ============================================================
+! Postprocessing
+! ============================================================
+
+/POST1
+SET,LAST
+
+! ============================================================
+! Results for crack tip 1
+! ============================================================
+
+*GET,tip1_from_cint,CINT,1,NODE,1
+
+*GET,ki1_1,CINT,1,CTIP,tip1_from_cint,CONTOUR,1,DTYPE,K1
+*GET,ki1_2,CINT,1,CTIP,tip1_from_cint,CONTOUR,2,DTYPE,K1
+*GET,ki1_3,CINT,1,CTIP,tip1_from_cint,CONTOUR,3,DTYPE,K1
+*GET,ki1_4,CINT,1,CTIP,tip1_from_cint,CONTOUR,4,DTYPE,K1
+*GET,ki1_5,CINT,1,CTIP,tip1_from_cint,CONTOUR,5,DTYPE,K1
+
+*GET,kii1_1,CINT,1,CTIP,tip1_from_cint,CONTOUR,1,DTYPE,K2
+*GET,kii1_2,CINT,1,CTIP,tip1_from_cint,CONTOUR,2,DTYPE,K2
+*GET,kii1_3,CINT,1,CTIP,tip1_from_cint,CONTOUR,3,DTYPE,K2
+*GET,kii1_4,CINT,1,CTIP,tip1_from_cint,CONTOUR,4,DTYPE,K2
+*GET,kii1_5,CINT,1,CTIP,tip1_from_cint,CONTOUR,5,DTYPE,K2
+
+! ============================================================
+! Results for crack tip 2
+! ============================================================
+
+*GET,tip2_from_cint,CINT,2,NODE,1
+
+*GET,ki2_1,CINT,2,CTIP,tip2_from_cint,CONTOUR,1,DTYPE,K1
+*GET,ki2_2,CINT,2,CTIP,tip2_from_cint,CONTOUR,2,DTYPE,K1
+*GET,ki2_3,CINT,2,CTIP,tip2_from_cint,CONTOUR,3,DTYPE,K1
+*GET,ki2_4,CINT,2,CTIP,tip2_from_cint,CONTOUR,4,DTYPE,K1
+*GET,ki2_5,CINT,2,CTIP,tip2_from_cint,CONTOUR,5,DTYPE,K1
+
+*GET,kii2_1,CINT,2,CTIP,tip2_from_cint,CONTOUR,1,DTYPE,K2
+*GET,kii2_2,CINT,2,CTIP,tip2_from_cint,CONTOUR,2,DTYPE,K2
+*GET,kii2_3,CINT,2,CTIP,tip2_from_cint,CONTOUR,3,DTYPE,K2
+*GET,kii2_4,CINT,2,CTIP,tip2_from_cint,CONTOUR,4,DTYPE,K2
+*GET,kii2_5,CINT,2,CTIP,tip2_from_cint,CONTOUR,5,DTYPE,K2
+
+! ============================================================
+! Average stable contours 3-5
+! ============================================================
+
+*SET,ki1_avg,(ki1_3+ki1_4+ki1_5)/3
+*SET,ki2_avg,(ki2_3+ki2_4+ki2_5)/3
+
+*SET,kii1_avg,(kii1_3+kii1_4+kii1_5)/3
+*SET,kii2_avg,(kii2_3+kii2_4+kii2_5)/3
+
+! ============================================================
+! Print parameters
+! ============================================================
+
+*STATUS
+
+! ============================================================
+! Print CINT tables
+! ============================================================
+
+PRCINT,1
+PRCINT,2
+
+FINISH

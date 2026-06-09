@@ -12,6 +12,7 @@ void drawHeavisideElements(const std::vector<HeavisideEnriched> &heaviside_enric
                            const std::vector<unsigned int> &node_offset,
                            const std::vector<bool> &heaviside_enriched_nodes, double scale)
 {
+    
     for (int i = 0; i < heaviside_enriched.size(); i++)
     {
         const HeavisideEnriched &hvsd_enr = heaviside_enriched[i];
@@ -162,6 +163,8 @@ void drawTipElements(const std::vector<TipEnriched> &tip_enriched, const QuadMes
         std::array<std::array<double, 4>, 4> f_nodes;
         Eigen::Vector2d d;
         double radius, radius2, theta, sqrt_r, sinhalftheta, sintheta, coshalftheta, costheta;
+        std::cout << "tip 1 " << crack_tip_1_n << '\n' << crack_tip_1_t << std::endl;
+        std::cout << "tip 2 " << crack_tip_2_n << '\n' << crack_tip_2_t << std::endl;
         for (int n = 0; n < 4; n++)
         {
             double xi_tip = tip_enr.tip_point_local_coords.x();
@@ -390,7 +393,8 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched,
         int used_elements = 0;
 
         auto integrateAtPoint = [&](const std::array<int, 4> &element, const Eigen::Matrix<double, 4, 2> &coords,
-                                    double xi, double eta, double integration_weight, int forced_H_value) {
+                                    double xi, double eta, double integration_weight, int forced_H_value,
+                                    bool use_heaviside_in_this_element, bool use_tip_in_this_element) {
             LinearQuad::ShapeData shape = fillQuadShape(xi, eta);
 
             LinearTriangle::JacobianData jd;
@@ -518,7 +522,7 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched,
                 grad_u_global(1, 0) += dNdx * uy;
                 grad_u_global(1, 1) += dNdy * uy;
 
-                if (heaviside_enriched_nodes[node])
+                if (use_heaviside_in_this_element && heaviside_enriched_nodes[node])
                 {
                     const int H_i = vertices_level_set_signs[node].sign;
                     const double H_shift = static_cast<double>(H_at_x - H_i);
@@ -532,7 +536,7 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched,
                     grad_u_global(1, 1) += dNdy * H_shift * ay;
                 }
 
-                if (tip_enriched_nodes[node])
+                if (use_tip_in_this_element && tip_enriched_nodes[node])
                 {
                     for (int a = 0; a < 4; ++a)
                     {
@@ -729,6 +733,24 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched,
             I_mode2 += integrand_mode2 * integration_weight;
         };
 
+        // ------------------------------------------------------------
+        // Duffy quadrature on [0, 1] x [0, 1]
+        // Used only for tip subtriangles.
+        // ------------------------------------------------------------
+        constexpr int DuffyN = 8;
+
+        const std::array<double, DuffyN> duffy_pts = {0.0198550717512319, 0.101666761293187, 0.237233795041836,
+                                                      0.408282678752175,  0.591717321247825, 0.762766204958164,
+                                                      0.898333238706813,  0.980144928248768};
+
+        const std::array<double, DuffyN> duffy_wts = {0.0506142681451881, 0.111190517226687, 0.156853322938944,
+                                                      0.181341891689181,  0.181341891689181, 0.156853322938944,
+                                                      0.111190517226687,  0.0506142681451881};
+
+        auto det2 = [](const Eigen::Vector2d &a, const Eigen::Vector2d &b) -> double {
+            return a.x() * b.y() - a.y() * b.x();
+        };
+
         for (size_t elem_id = 0; elem_id < mesh.elements.size(); ++elem_id)
         {
             const std::array<int, 4> &element = mesh.elements[elem_id];
@@ -751,7 +773,7 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched,
             const int heaviside_index = heaviside_element_to_index[elem_id_int];
 
             // ------------------------------------------------------------
-            // 1. Current crack-tip element: use tip triangulation
+            // 1. Current crack-tip element: use Duffy transform
             // ------------------------------------------------------------
             if (elem_id_int == tip_data.id)
             {
@@ -768,49 +790,102 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched,
                 {
                     const std::array<unsigned char, 3> &triangle = triangulation.tri_indices[tri_id];
 
-                    Eigen::Matrix2d J_xieta_rs;
-                    J_xieta_rs << local_points[triangle[1]].x() - local_points[triangle[0]].x(),
-                        local_points[triangle[2]].x() - local_points[triangle[0]].x(),
-                        local_points[triangle[1]].y() - local_points[triangle[0]].y(),
-                        local_points[triangle[2]].y() - local_points[triangle[0]].y();
+                    // ------------------------------------------------------------
+                    // Duffy transform must start from the singular vertex.
+                    // In this local_points array:
+                    //
+                    // local_points[5] = crack tip
+                    //
+                    // Therefore every tip subtriangle must contain vertex 5.
+                    // ------------------------------------------------------------
+                    int tip_pos = -1;
 
-                    const double det_tri = J_xieta_rs.determinant();
-
-                    for (unsigned int gp = 0; gp < NGauss; ++gp)
+                    for (int q = 0; q < 3; ++q)
                     {
-                        const double r_tri = gauss_pts[gp][0];
-                        const double s_tri = gauss_pts[gp][1];
-                        const double t_tri = 1.0 - r_tri - s_tri;
-
-                        const double xi = local_points[triangle[0]].x() * t_tri +
-                                          local_points[triangle[1]].x() * r_tri + local_points[triangle[2]].x() * s_tri;
-
-                        const double eta = local_points[triangle[0]].y() * t_tri +
-                                           local_points[triangle[1]].y() * r_tri +
-                                           local_points[triangle[2]].y() * s_tri;
-
-                        LinearQuad::ShapeData tmp_shape = fillQuadShape(xi, eta);
-
-                        LinearTriangle::JacobianData tmp_jd;
-                        tmp_jd.J = tmp_shape.dN_xi_eta * coords;
-
-                        bool tmp_invertible = false;
-                        tmp_jd.J.computeInverseAndDetWithCheck(tmp_jd.invJ, tmp_jd.detJ, tmp_invertible, 1e-12);
-
-                        if (!tmp_invertible)
+                        if (triangle[q] == 5)
                         {
-                            throw std::runtime_error("Jacobi matrix is not invertible");
+                            tip_pos = q;
+                            break;
                         }
+                    }
 
-                        const double weight = gauss_wts[gp] * std::abs(det_tri) * std::abs(tmp_jd.detJ);
+                    if (tip_pos == -1)
+                    {
+                        throw std::runtime_error(
+                            "Duffy transform failed: tip point is not a vertex of tip subtriangle");
+                    }
 
-                        // forced_H_value = 0:
-                        // inside tip element we let H be determined by local x2
-                        integrateAtPoint(element, coords, xi, eta, weight, 0);
+                    const int idx_A = triangle[tip_pos]; // tip vertex
+                    const int idx_B = triangle[(tip_pos + 1) % 3];
+                    const int idx_C = triangle[(tip_pos + 2) % 3];
+
+                    const Eigen::Vector2d A = local_points[idx_A]; // tip point
+                    const Eigen::Vector2d Bp = local_points[idx_B];
+                    const Eigen::Vector2d Cp = local_points[idx_C];
+
+                    const Eigen::Vector2d AB = Bp - A;
+                    const Eigen::Vector2d AC = Cp - A;
+
+                    const double det_duffy_tri = std::abs(det2(AB, AC));
+
+                    if (det_duffy_tri < 1e-14)
+                    {
+                        throw std::runtime_error("Degenerate Duffy subtriangle");
+                    }
+
+                    for (int ir = 0; ir < DuffyN; ++ir)
+                    {
+                        const double rho = duffy_pts[ir];
+                        const double wrho = duffy_wts[ir];
+
+                        for (int it = 0; it < DuffyN; ++it)
+                        {
+                            const double tau = duffy_pts[it];
+                            const double wtau = duffy_wts[it];
+
+                            // ------------------------------------------------------------
+                            // Duffy mapping from square to triangle:
+                            //
+                            // X(rho,tau) =
+                            // A + rho * ((1 - tau) * (B - A) + tau * (C - A))
+                            //
+                            // rho = 0 -> crack tip
+                            // rho = 1 -> opposite edge B-C
+                            //
+                            // Jacobian in local xi-eta triangle:
+                            //
+                            // |d(xi,eta)/d(rho,tau)| =
+                            // rho * |det(B-A, C-A)|
+                            // ------------------------------------------------------------
+                            const Eigen::Vector2d xi_eta = A + rho * ((1.0 - tau) * AB + tau * AC);
+
+                            const double xi = xi_eta.x();
+                            const double eta = xi_eta.y();
+
+                            LinearQuad::ShapeData tmp_shape = fillQuadShape(xi, eta);
+
+                            LinearTriangle::JacobianData tmp_jd;
+                            tmp_jd.J = tmp_shape.dN_xi_eta * coords;
+
+                            bool tmp_invertible = false;
+
+                            tmp_jd.J.computeInverseAndDetWithCheck(tmp_jd.invJ, tmp_jd.detJ, tmp_invertible, 1e-12);
+
+                            if (!tmp_invertible)
+                            {
+                                throw std::runtime_error("Jacobi matrix is not invertible");
+                            }
+
+                            const double weight = wrho * wtau * rho * det_duffy_tri * std::abs(tmp_jd.detJ);
+
+                            integrateAtPoint(element, coords, xi, eta, weight, 0,
+                                             false, // Heaviside не включаем в tip element
+                                             true   // tip enrichment включаем
+                            );
+                        }
                     }
                 }
             }
-
             // ------------------------------------------------------------
             // 2. Heaviside-enriched element inside the patch:
             //    use Heaviside triangulation, not regular 2x2 quadrature
@@ -832,7 +907,7 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched,
                 {
                     const std::array<unsigned char, 3> &triangle = h_triangulation.tri_indices[tri_id];
 
-                    const int forced_H_value = tri_id < h_triangulation.positive_heaviside_triangles_num ? 1 : -1;
+                    const int forced_H_value = tri_id < h_triangulation.positive_heaviside_triangles_num ? -1 : 1;
 
                     Eigen::Matrix2d J_xieta_rs;
                     J_xieta_rs << local_points[triangle[1]].x() - local_points[triangle[0]].x(),
@@ -870,7 +945,10 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched,
 
                         const double weight = gauss_wts[gp] * std::abs(det_tri) * std::abs(tmp_jd.detJ);
 
-                        integrateAtPoint(element, coords, xi, eta, weight, forced_H_value);
+                        integrateAtPoint(element, coords, xi, eta, weight, forced_H_value,
+                                         true, // Heaviside включаем
+                                         false // tip не включаем
+                        );
                     }
                 }
             }
@@ -903,7 +981,10 @@ void computeStress(const std::vector<TipEnriched> &tip_enriched,
 
                         const double weight = std::abs(tmp_jd.detJ);
 
-                        integrateAtPoint(element, coords, xi, eta, weight, 0);
+                        integrateAtPoint(element, coords, xi, eta, weight, 0,
+                                         false, // Heaviside не включаем
+                                         false  // tip не включаем
+                        );
                     }
                 }
             }

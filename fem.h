@@ -132,136 +132,68 @@ namespace Triangle7PointRule
     constexpr std::array<double, 7> gauss_wts{0.1125, 0.066197075, 0.066197075, 0.066197075, 0.06296959, 0.06296959, 0.06296959};
 } // namespace Triangle7PointRule
 
-// -----------------------------------------------------------------------------
-// 13-point Dunavant quadrature rule for triangles (degree 7)
-// Fully symmetric; weights sum to 0.5 (area of reference triangle in barycentric
-// coordinates). Points are given in barycentric coordinates (alpha, beta, gamma)
-// with alpha+beta+gamma = 1.
-// -----------------------------------------------------------------------------
 namespace Triangle13PointRule
 {
     constexpr int NGauss = 13;
 
-    // Barycentric coordinates of the 7 suborders (one representative point per group)
-    // Each group has a multiplicity (number of symmetric permutations).
-    struct Suborder
-    {
-        double alpha, beta, gamma;  // barycentric coordinates
-        int    multiplicity;
-        double weight;
-    };
+    // Reference triangle:
+    // (r, s), r >= 0, s >= 0, r + s <= 1
+    //
+    // Weights are scaled so that:
+    //
+    // sum(gauss_wts) = 0.5
+    //
+    // Therefore use:
+    //
+    // factor = w * abs(det_tri) * abs(detJ_quad)
 
-    constexpr std::array<Suborder, 7> suborders = {{
-        // Center point (multiplicity 1)
-        {1.0/3.0, 1.0/3.0, 1.0/3.0, 1, 0.0585965378125140},
-        // Group 2
-        {0.0656580994902338, 0.4671709937548831, 0.4671709937548831, 3, 0.0367328276581104},
-        // Group 3
-        {0.2394561903592004, 0.3802719138203998, 0.3802719138203998, 3, 0.0460857289325750},
-        // Group 4
-        {0.1223765409381765, 0.4388117295309117, 0.4388117295309117, 3, 0.0456344039165646},
-        // Group 5
-        {0.4805921777677173, 0.2597039111161413, 0.2597039111161413, 3, 0.0269370892491420},
-        // Group 6
-        {0.0656580994902338, 0.0656580994902338, 0.8686838010195324, 3, 0.0122632040831080},
-        // Group 7
-        {0.2394561903592004, 0.2394561903592004, 0.5210876192815992, 3, 0.0211130507384505}
+    static const std::array<std::array<double, 2>, NGauss> gauss_pts = {{
+        // centroid
+        {1.0 / 3.0, 1.0 / 3.0},
+
+        // group 1: a = 0.479308067841920, b = 0.260345966079040
+        {0.260345966079040, 0.260345966079040},
+        {0.260345966079040, 0.479308067841920},
+        {0.479308067841920, 0.260345966079040},
+
+        // group 2: a = 0.869739794195568, b = 0.065130102902216
+        {0.065130102902216, 0.065130102902216},
+        {0.065130102902216, 0.869739794195568},
+        {0.869739794195568, 0.065130102902216},
+
+        // group 3: a = 0.638444188569809,
+        //          b = 0.312865496004875,
+        //          c = 0.048690315425316
+        {0.312865496004875, 0.048690315425316},
+        {0.048690315425316, 0.312865496004875},
+        {0.638444188569809, 0.048690315425316},
+        {0.048690315425316, 0.638444188569809},
+        {0.638444188569809, 0.312865496004875},
+        {0.312865496004875, 0.638444188569809}
     }};
 
-    // Flattened arrays for direct iteration (optional, but convenient)
-    // We'll generate them at compile time using a constexpr function.
-    // However, to keep things simple, we'll provide a runtime generator.
-    // For performance, you can pre‑compute these once.
+    static const std::array<double, NGauss> gauss_wts = {{
+        // centroid
+        -0.0747850222338350,
 
-    inline void getQuadraturePoints(std::vector<std::array<double,2>>& points,
-                                    std::vector<double>& weights)
-    {
-        points.clear();
-        weights.clear();
-        for (const auto& sub : suborders)
-        {
-            // Generate all permutations of (alpha, beta, gamma) with multiplicity
-            // For multiplicity 1, only the point itself.
-            // For multiplicity 3, we have 3 distinct permutations:
-            //   (a,b,c), (b,c,a), (c,a,b)
-            // But careful: some suborders have two equal coordinates, so permutations
-            // may produce duplicates. The multiplicity given already accounts for that.
-            // We'll generate the minimal set and let the loop handle it.
-            std::vector<std::array<double,3>> perms;
-            double a = sub.alpha, b = sub.beta, c = sub.gamma;
-            if (sub.multiplicity == 1)
-            {
-                perms.push_back({a, b, c});
-            }
-            else if (sub.multiplicity == 3)
-            {
-                // Three distinct permutations (assuming not all equal)
-                perms.push_back({a, b, c});
-                perms.push_back({b, c, a});
-                perms.push_back({c, a, b});
-                // Remove duplicates if two coordinates are equal (e.g., a == b)
-                // In such case, the three permutations reduce to one. But the
-                // multiplicity already tells us how many unique points to add.
-                // To avoid double counting, we can use a set, but simpler:
-                // We'll rely on the fact that for suborders with two equal values,
-                // the multiplicity is still 3 but the generated set will have
-                // only 1 unique point. To fix, we'll use a small filter.
-                std::vector<std::array<double,3>> unique;
-                for (const auto& p : perms)
-                {
-                    bool duplicate = false;
-                    for (const auto& u : unique)
-                    {
-                        if (std::abs(p[0]-u[0]) < 1e-12 && std::abs(p[1]-u[1]) < 1e-12)
-                        { duplicate = true; break; }
-                    }
-                    if (!duplicate) unique.push_back(p);
-                }
-                perms = unique;
-                // Now perms size should equal sub.multiplicity (1 or 3)
-            }
-            for (const auto& p : perms)
-            {
-                // Barycentric to Cartesian (x,y) coordinates on reference triangle
-                // We need (ξ, η) coordinates for the triangle's local coordinate system.
-                // Typically the reference triangle has vertices: (0,0), (1,0), (0,1).
-                // Then barycentric (α,β,γ) corresponds to (x=β, y=γ).
-                // But your code uses points in (ξ,η) for the quadrilateral sub‑triangles.
-                // For consistency, we keep the barycentric coordinates and later
-                // map to (ξ,η) using the triangle's vertices (given in local quadrilateral coordinates).
-                // So we store the barycentric coordinates (α,β,γ) – actually we only need (β,γ)
-                // because α = 1-β-γ.
-                double x = p[1]; // β
-                double y = p[2]; // γ
-                points.push_back({x, y});
-                weights.push_back(sub.weight / sub.multiplicity); // distribute weight among permutations
-            }
-        }
-        // Ensure sum of weights = 0.5
-        double sum = 0.0;
-        for (double w : weights) sum += w;
-        // (optional) adjust if needed
-    }
+        // group 1, original weight 0.175615257433208 / 2
+        0.0878076287166040,
+        0.0878076287166040,
+        0.0878076287166040,
 
-    // Alternatively, pre‑compute static arrays (more efficient)
-    // We'll create static arrays of size 13.
-    static const std::array<std::array<double,2>, 13> gauss_pts = [](){
-        std::vector<std::array<double,2>> pts;
-        std::vector<double> wts;
-        getQuadraturePoints(pts, wts);
-        std::array<std::array<double,2>,13> arr{};
-        for (size_t i=0; i<13; ++i) arr[i] = pts[i];
-        return arr;
-    }();
+        // group 2, original weight 0.053347235608839 / 2
+        0.0266736178044195,
+        0.0266736178044195,
+        0.0266736178044195,
 
-    static const std::array<double,13> gauss_wts = [](){
-        std::vector<std::array<double,2>> pts;
-        std::vector<double> wts;
-        getQuadraturePoints(pts, wts);
-        std::array<double,13> arr{};
-        for (size_t i=0; i<13; ++i) arr[i] = wts[i];
-        return arr;
-    }();
+        // group 3, original weight 0.077113760890257 / 2
+        0.0385568804451285,
+        0.0385568804451285,
+        0.0385568804451285,
+        0.0385568804451285,
+        0.0385568804451285,
+        0.0385568804451285
+    }};
 }
 
 } // namespace LinearTriangle

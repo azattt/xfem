@@ -1,0 +1,365 @@
+FINISH
+/CLEAR,NOSTART
+
+/PREP7
+
+! ============================================================
+! SMART / CINT 3D EDGE CRACK MODEL
+!
+! Full plate:
+! X: 0 ... W
+! Y: 0 ... H
+! Z: 0 ... T
+!
+! Edge crack:
+! x = 0 ... a
+! y = H/2
+! z = 0 ... T
+!
+! Loading:
+! top face    y = H : tension +Y
+! bottom face y = 0 : tension -Y
+!
+! Element:
+! SOLID187 tetrahedral mesh
+! ============================================================
+
+! -----------------------------
+! Parameters
+! -----------------------------
+*SET,W,1.0
+*SET,H,1.0
+*SET,T,0.1
+
+*SET,a,0.3
+*SET,yc,H/2
+
+*SET,sigma,1000000
+
+! Coarse value 0.1 is too rough for crack front.
+! Use 0.03 first. Then refine to 0.02 if needed.
+*SET,mesh_size,0.03
+*SET,crack_front_size,0.01
+
+! For test growth.
+! If crack does not grow: decrease KIC or increase sigma.
+! If solution becomes unstable: increase KIC or decrease sigma.
+*SET,KIC,1.0e5
+
+! -----------------------------
+! Element and material
+! -----------------------------
+ET,1,SOLID187
+
+MP,EX,1,2e11
+MP,PRXY,1,0.3
+
+TYPE,1
+MAT,1
+
+! ============================================================
+! GEOMETRY
+!
+! Four volumes:
+! V_LL: x=0..a, y=0..yc
+! V_LU: x=0..a, y=yc..H
+! V_RL: x=a..W, y=0..yc
+! V_RU: x=a..W, y=yc..H
+!
+! Crack faces:
+! between V_LL and V_LU for x=0..a, y=yc.
+!
+! These crack-face nodes must remain duplicated.
+! ============================================================
+
+BLOCK,0,a,0,yc,0,T
+*GET,v_ll,VOLU,0,NUM,MAX
+
+BLOCK,0,a,yc,H,0,T
+*GET,v_lu,VOLU,0,NUM,MAX
+
+BLOCK,a,W,0,yc,0,T
+*GET,v_rl,VOLU,0,NUM,MAX
+
+BLOCK,a,W,yc,H,0,T
+*GET,v_ru,VOLU,0,NUM,MAX
+
+ALLSEL,ALL
+
+! ============================================================
+! MESH
+! ============================================================
+
+TYPE,1
+MAT,1
+
+ESIZE,mesh_size
+MSHAPE,1,3D
+MSHKEY,0
+
+VMESH,ALL
+
+ALLSEL,ALL
+
+! ============================================================
+! SELECTIVE NODE MERGING
+!
+! We merge only material-continuity interfaces:
+!
+! 1) x = a, y = 0..yc
+! 2) x = a, y = yc..H
+! 3) y = yc, x = a..W
+!
+! We do NOT merge crack faces:
+! y = yc, x = 0..a
+! ============================================================
+
+SELTOL,mesh_size/20
+
+! ------------------------------------------------------------
+! Merge lower vertical interface: x = a, y = 0..yc
+! ------------------------------------------------------------
+NSEL,S,LOC,X,a
+NSEL,R,LOC,Y,0,yc
+NUMMRG,NODE
+ALLSEL,ALL
+
+! ------------------------------------------------------------
+! Merge upper vertical interface: x = a, y = yc..H
+! ------------------------------------------------------------
+NSEL,S,LOC,X,a
+NSEL,R,LOC,Y,yc,H
+NUMMRG,NODE
+ALLSEL,ALL
+
+! ------------------------------------------------------------
+! Merge right ligament: y = yc, x = a..W
+! ------------------------------------------------------------
+NSEL,S,LOC,Y,yc
+NSEL,R,LOC,X,a,W
+NUMMRG,NODE
+ALLSEL,ALL
+
+NUMCMP,NODE
+NUMCMP,ELEM
+
+ALLSEL,ALL
+
+! ============================================================
+! LOADS
+! ============================================================
+
+! Top surface: tension upward
+ASEL,S,LOC,Y,H
+SFA,ALL,1,PRES,-sigma
+ALLSEL,ALL
+
+! Bottom surface: tension downward
+ASEL,S,LOC,Y,0
+SFA,ALL,1,PRES,-sigma
+ALLSEL,ALL
+
+! ============================================================
+! MINIMAL CONSTRAINTS
+!
+! These are only to remove rigid-body motion.
+! They are not intended to clamp the plate.
+! ============================================================
+
+! Node A: fix UX, UY, UZ
+NSEL,S,LOC,X,0
+NSEL,R,LOC,Y,0
+NSEL,R,LOC,Z,0
+*GET,nA,NODE,0,NUM,MIN
+
+D,nA,UX,0
+D,nA,UY,0
+D,nA,UZ,0
+
+ALLSEL,ALL
+
+! Node B: fix UY, UZ
+NSEL,S,LOC,X,W
+NSEL,R,LOC,Y,0
+NSEL,R,LOC,Z,0
+*GET,nB,NODE,0,NUM,MIN
+
+D,nB,UY,0
+D,nB,UZ,0
+
+ALLSEL,ALL
+
+! Node C: fix UY only
+NSEL,S,LOC,X,0
+NSEL,R,LOC,Y,0
+NSEL,R,LOC,Z,T
+*GET,nC,NODE,0,NUM,MIN
+
+D,nC,UY,0
+
+ALLSEL,ALL
+
+! ============================================================
+! CRACK COMPONENTS
+! ============================================================
+
+SELTOL,mesh_size/5
+
+! ------------------------------------------------------------
+! Crack front:
+! x = a, y = yc, z = 0..T
+! ------------------------------------------------------------
+NSEL,S,LOC,X,a
+NSEL,R,LOC,Y,yc
+CM,CRACK_FRONT,NODE
+ALLSEL,ALL
+
+! ------------------------------------------------------------
+! Upper crack face:
+! nodes at y = yc, x = 0..a,
+! connected to upper-side elements
+! ------------------------------------------------------------
+ESEL,S,CENT,X,0,a
+ESEL,R,CENT,Y,yc,H
+NSLE,S
+NSEL,R,LOC,Y,yc
+NSEL,R,LOC,X,0,a
+CM,SURUPPER,NODE
+ALLSEL,ALL
+
+! ------------------------------------------------------------
+! Lower crack face:
+! nodes at y = yc, x = 0..a,
+! connected to lower-side elements
+! ------------------------------------------------------------
+ESEL,S,CENT,X,0,a
+ESEL,R,CENT,Y,0,yc
+NSLE,S
+NSEL,R,LOC,Y,yc
+NSEL,R,LOC,X,0,a
+CM,SURLOWER,NODE
+ALLSEL,ALL
+
+! ------------------------------------------------------------
+! Diagnostic counts
+! ------------------------------------------------------------
+
+CMSEL,S,CRACK_FRONT
+*GET,n_front,NODE,0,COUNT
+ALLSEL,ALL
+
+CMSEL,S,SURUPPER
+*GET,n_up,NODE,0,COUNT
+ALLSEL,ALL
+
+CMSEL,S,SURLOWER
+*GET,n_low,NODE,0,COUNT
+ALLSEL,ALL
+
+*STATUS,n_front
+*STATUS,n_up
+*STATUS,n_low
+
+! If n_front, n_up or n_low are zero, CINT/SMART will not work.
+
+! ============================================================
+! CINT DEFINITION
+! First verify SIFs before enabling SMART growth.
+! ============================================================
+
+CINT,NEW,1
+CINT,TYPE,SIFS
+
+! Crack-extension direction explicitly: +X
+CINT,CENC,CRACK_FRONT,,,,1,0,0
+
+! Crack plane normal: global Y
+CINT,NORM,0,2
+
+CINT,NCON,5
+CINT,SURF,SURUPPER,SURLOWER
+CINT,SMOOTH,MLS,5
+
+CINT,PLOT,1,1
+CINT,LIST,1
+
+! ============================================================
+! SMART CRACK GROWTH
+!
+! IMPORTANT:
+! If you want only CINT/SIFs, comment this CGROW block.
+! If CINT does not work, SMART will not work either.
+! ============================================================
+
+CGROW,NEW,1
+CGROW,CID,1
+
+! SMART with remeshing
+CGROW,METHOD,SMART,REME
+
+! Static KIC criterion
+CGROW,FCOPTION,KIC,KIC
+
+! Local remeshing size near crack front
+CGROW,RMCONT,ESIZE,crack_front_size,COMP,CRACK_FRONT
+
+! Stop after total crack extension reaches 0.05
+CGROW,STOP,DAMX,0.05
+
+ALLSEL,ALL
+
+FINISH
+
+! ============================================================
+! SOLUTION
+! ============================================================
+
+/SOLU
+
+ANTYPE,STATIC
+NLGEOM,OFF
+
+AUTOTS,ON
+NSUBST,20,100,1
+KBC,0
+
+OUTRES,ALL,ALL
+OUTRES,CINT,ALL
+
+BCSOPTION,,INCORE,,FORCE
+
+SOLVE
+
+FINISH
+
+! ============================================================
+! POSTPROCESSING
+! ============================================================
+
+/POST1
+SET,LAST
+
+/OUT,smart_results,txt
+
+/COM ============================================================
+/COM CINT / SMART RESULTS
+/COM ============================================================
+
+/COM Stress intensity factors:
+PRCINT,1,,K1
+PRCINT,1,,K2
+PRCINT,1,,K3
+
+/COM Crack growth values if available:
+PRCINT,1,,DLTA
+PRCINT,1,,R
+
+/OUT
+
+PRCINT,1,,K1
+PRCINT,1,,K2
+PRCINT,1,,K3
+PRCINT,1,,DLTA
+PRCINT,1,,R
+
+FINISH

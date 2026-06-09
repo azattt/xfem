@@ -2,5 +2,5 @@
 
 #include <Eigen/Dense>
 
-void applyBC(double w, double h, int wn, int hn, Eigen::VectorXd& P, const std::vector<unsigned int>& node_offset, std::vector<int>& fixedDofs,
+void applyBC(double w, double h, int wn, int hn, double thickness, Eigen::VectorXd& P, const std::vector<unsigned int>& node_offset, std::vector<int>& fixedDofs,
 std::vector<double>& fixedValues);
