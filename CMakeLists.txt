@@ -18,7 +18,8 @@ add_executable(xfem main.cpp fem.cpp gui.cpp levelset.cpp
   Q4.cpp
   postprocess.cpp
   misc.cpp
-  BC.cpp)
+  BC.cpp
+  mp.cpp)
 
 target_link_libraries(xfem xfem_core)
 

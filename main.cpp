@@ -20,6 +20,7 @@
 #include "gui.h"
 #include "levelset.h"
 #include "postprocess.h"
+#include "mp.h"
 
 #include "BC.h"
 
@@ -438,9 +439,17 @@ int main()
               << " Tip enriched: " << enriched_elements.tip_enriched.size() << std::endl;
     std::cout << "Assembling matrix of size: " << dof_counter << std::endl;
     std::cout << "Triplets count: " << total_triplets << std::endl;
+    
+    
+    double E, nu;
 
-    const double E = 2 * std::pow(10, 11);
-    constexpr double nu = 0.3;
+    std::ifstream mp_data("mesh/mp.txt");
+    if (!mp_data.is_open())
+    {
+        throw std::runtime_error("Couldn't open mesh/mp.txt");
+    }
+    mp_data >> E >> nu;
+
     const Eigen::Matrix3d D = setup_D_matrix(E, nu, true);
 
     // 8-point Gauss-Legendre on [0, 1]
