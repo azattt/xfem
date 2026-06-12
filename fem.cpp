@@ -3,7 +3,8 @@
 
 #include <Eigen/SparseCholesky>
 #include <Eigen/src/SparseLU/SparseLU.h>
-#include <Eigen/src/OrderingMethods/Ordering.h>
+#include <Eigen/PardisoSupport>
+
 
 Eigen::Matrix3d setup_D_matrix(double E, double nu, bool plane_stress)
 {
@@ -474,8 +475,9 @@ void addElementSparseUpperStiffness(const LinearQuad::Element& element,
         std::cout << "isSymmetric(K): " << isSymmetric(K) << std::endl;
 
         // Eigen::SimplicialLLT<Eigen::SparseMatrix<double>, Eigen::Upper> solver(K);
-        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver(K);
+        // Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver(K);
         // Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
+        Eigen::PardisoLDLT<Eigen::SparseMatrix<double>, Eigen::Upper> solver;
         solver.analyzePattern(K);
         solver.factorize(K);
         std::cout << "Solver info(): " << solver.info() << std::endl;

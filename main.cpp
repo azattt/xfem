@@ -1966,7 +1966,7 @@ int main()
     std::vector<GrowthFrame> growth_frames;
     growth_frames.reserve(max_growth_steps);
 
-    const double da = 1.0 * std::min(wh, hh);
+    const double da = 1.1 * std::min(wh, hh);
 
     XFemIterationResult solve_result;
 
@@ -2530,18 +2530,18 @@ int main()
             );
         }
 
-        if (!visual.circles.empty())
-        {
-            circle_shader.use();
-            circle_shader.setMat4("mvp", MVP);
-            glBindVertexArray(circleVAO);
-            glDrawArraysInstanced(
-                GL_TRIANGLE_FAN,
-                0,
-                circles_vertices_number,
-                static_cast<GLsizei>(visual.circles.size())
-            );
-        }
+        // if (!visual.circles.empty())
+        // {
+        //     circle_shader.use();
+        //     circle_shader.setMat4("mvp", MVP);
+        //     glBindVertexArray(circleVAO);
+        //     glDrawArraysInstanced(
+        //         GL_TRIANGLE_FAN,
+        //         0,
+        //         circles_vertices_number,
+        //         static_cast<GLsizei>(visual.circles.size())
+        //     );
+        // }
 
         if (!visual.crack_vertices.empty())
         {
