@@ -342,6 +342,19 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
         // assume that all elements are convex
         const bool tip1 = inQuad(quad_mesh.vertices[element[0]], quad_mesh.vertices[element[1]], quad_mesh.vertices[element[2]], quad_mesh.vertices[element[3]], crack_tip_1_vertex);
         const bool tip2 = inQuad(quad_mesh.vertices[element[0]], quad_mesh.vertices[element[1]], quad_mesh.vertices[element[2]], quad_mesh.vertices[element[3]], crack_tip_2_vertex);
+        bool tip1_surround = false, tip2_surround = false;
+        if ((crack_tip_1_vertex - quad_mesh.vertices[element[0]]).norm() < 0.2 ||
+            (crack_tip_1_vertex - quad_mesh.vertices[element[1]]).norm() < 0.2 ||
+            (crack_tip_1_vertex - quad_mesh.vertices[element[2]]).norm() < 0.2 ||
+            (crack_tip_1_vertex - quad_mesh.vertices[element[3]]).norm() < 0.2){
+            tip1_surround = true;
+        }
+        if ((crack_tip_2_vertex - quad_mesh.vertices[element[0]]).norm() < 0.2 ||
+            (crack_tip_2_vertex - quad_mesh.vertices[element[1]]).norm() < 0.2 ||
+            (crack_tip_2_vertex - quad_mesh.vertices[element[2]]).norm() < 0.2 ||
+            (crack_tip_2_vertex - quad_mesh.vertices[element[3]]).norm() < 0.2){
+            tip2_surround = true;
+        }
         if (tip1 && tip2){
             std::cout << "NotImplemented: Both tips in one element." << std::endl;
             continue;
@@ -460,11 +473,30 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
                 tip_enriched_nodes[node] = true;
             }
         }
+        if (tip1_surround && tip2_surround){
+            continue;
+        }
+        if (tip1_surround){
+            
+        }
     }
     // then find heaviside enriched
     bool skip = false;
     for (int i = 0; i < quad_mesh.elements.size(); i++){
         const std::array<int, 4>& element = quad_mesh.elements[i];
+        bool tip1_surround = false, tip2_surround = false;
+        if ((crack_tip_1_vertex - quad_mesh.vertices[element[0]]).norm() < 0.2 ||
+            (crack_tip_1_vertex - quad_mesh.vertices[element[1]]).norm() < 0.2 ||
+            (crack_tip_1_vertex - quad_mesh.vertices[element[2]]).norm() < 0.2 ||
+            (crack_tip_1_vertex - quad_mesh.vertices[element[3]]).norm() < 0.2){
+            tip1_surround = true;
+        }
+        if ((crack_tip_2_vertex - quad_mesh.vertices[element[0]]).norm() < 0.2 ||
+            (crack_tip_2_vertex - quad_mesh.vertices[element[1]]).norm() < 0.2 ||
+            (crack_tip_2_vertex - quad_mesh.vertices[element[2]]).norm() < 0.2 ||
+            (crack_tip_2_vertex - quad_mesh.vertices[element[3]]).norm() < 0.2){
+            tip2_surround = true;
+        }
         skip = false;
         if ((level_set_fields.vertices_level_set_signs[element[0]].sign == 0 +
             level_set_fields.vertices_level_set_signs[element[1]].sign == 0 +
