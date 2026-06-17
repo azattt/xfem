@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_definitions(-DEIGEN_NO_DEBUG -DEIGEN_MPL2_ONLY -DEIGEN_NO_STATIC_ASSERT)
+add_definitions(-DEIGEN_USE_MKL_ALL)
 
 add_library(xfem_core STATIC
   # compute.cpp
@@ -24,6 +25,7 @@ add_executable(xfem main.cpp fem.cpp gui.cpp levelset.cpp
 target_link_libraries(xfem xfem_core)
 
 target_include_directories(xfem PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(xfem_core PRIVATE "C:/Program Files (x86)/Intel/oneAPI/mkl/latest/include")
 
 add_library(glfw STATIC IMPORTED) # or STATIC instead of SHARED
 set_target_properties(glfw PROPERTIES
@@ -46,6 +48,7 @@ set_target_properties(glm PROPERTIES
 )
 target_link_libraries(xfem_core glm) 
 
+                                   
 # # 1. Создаём импортированную цель для Gmsh DLL
 # add_library(gmsh SHARED IMPORTED)
 
