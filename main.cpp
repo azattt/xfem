@@ -1730,20 +1730,20 @@ GrowthFrameVisual makeGrowthFrameVisual(
             scale
         );
 
-    visual.circles.reserve(mesh.vertices.size());
+    // visual.circles.reserve(mesh.vertices.size());
 
-    for (int idx = 0; idx < static_cast<int>(mesh.vertices.size()); ++idx)
-    {
-        visual.circles.push_back(
-            Circle{
-                glm::vec3{
-                    toGlm(vertices_displaced[idx].cast<float>().eval()),
-                    1.0f / static_cast<float>(SCR_WIDTH)
-                },
-                glm::vec4{0.0f, 1.0f, 0.0f, 1.0f}
-            }
-        );
-    }
+    // for (int idx = 0; idx < static_cast<int>(mesh.vertices.size()); ++idx)
+    // {
+    //     visual.circles.push_back(
+    //         Circle{
+    //             glm::vec3{
+    //                 toGlm(vertices_displaced[idx].cast<float>().eval()),
+    //                 1.0f / static_cast<float>(SCR_WIDTH)
+    //             },
+    //             glm::vec4{0.0f, 1.0f, 0.0f, 1.0f}
+    //         }
+    //     );
+    // }
 
     visual.crack_vertices =
         makeCrackLineVertices(
@@ -1901,7 +1901,9 @@ int main()
     {
         for (int i = 0; i < wn - 1; i++)
         {
-            if ((i >= wn / 6 - 1 && i <= 2 * wn / 6) && j == 3 * hn / 5)
+            if ((i >= wn / 6 - 1 && i <= 2 * wn / 6) && (j >= hn / 6 - 1 && j <= 2 * hn / 6))
+                continue;
+            if ((i >= wn / 6 - 1 && i <= 2 * wn / 6) && (j >= 4*hn / 6 - 1 && j <= 5 * hn / 6))
                 continue;
             mesh.elements.push_back(
                 std::array<int, 4>{j * wn + i, j * wn + i + 1, (j + 1) * wn + i + 1, (j + 1) * wn + i});
@@ -1966,7 +1968,7 @@ int main()
     std::vector<GrowthFrame> growth_frames;
     growth_frames.reserve(max_growth_steps);
 
-    const double da = 1.0 * std::min(wh, hh);
+    const double da = std::sqrt(wh*wh+hh*hh);
 
     XFemIterationResult solve_result;
 

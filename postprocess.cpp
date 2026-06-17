@@ -749,12 +749,12 @@ bool growCrackOneStep(
 
     Eigen::Vector2d new_tip = old_tip + da * growth_dir;
 
-    if (!pointInsideDomain(new_tip, domain_w, domain_h))
-    {
-        std::cout << "Crack growth stopped: new tip is outside domain. "
-                  << "new_tip = " << new_tip.transpose() << "\n";
-        return false;
-    }
+    // if (!pointInsideDomain(new_tip, domain_w, domain_h))
+    // {
+    //     std::cout << "Crack growth stopped: new tip is outside domain. "
+    //               << "new_tip = " << new_tip.transpose() << "\n";
+    //     return false;
+    // }
 
     if (best->tip_index == 1)
     {
