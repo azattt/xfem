@@ -1964,7 +1964,7 @@ int main()
     const double KIC = 0.75e6;    // Pa * sqrt(m)
     const Eigen::Matrix3d D = setup_D_matrix(E, nu, true);
 
-    const int max_growth_steps = 100;
+    const int max_growth_steps = 200;
     std::vector<GrowthFrame> growth_frames;
     growth_frames.reserve(max_growth_steps);
 

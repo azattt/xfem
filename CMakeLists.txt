@@ -22,7 +22,7 @@ add_executable(xfem main.cpp fem.cpp gui.cpp levelset.cpp
   BC.cpp
   calculate.cpp)
 
-target_link_libraries(xfem xfem_core)
+
 
 target_include_directories(xfem PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_include_directories(xfem_core PRIVATE "C:/Program Files (x86)/Intel/oneAPI/mkl/latest/include")
@@ -39,7 +39,35 @@ elseif(UNIX)
     target_link_libraries(xfem_core glfw m pthread dl X11)
 endif()
 
+set(MKL_ARCH intel64)
+set(MKL_THREADING sequential)
+set(MKL_INTERFACE lp64)
 
+find_package(MKL CONFIG REQUIRED)
+
+target_compile_definitions(xfem PRIVATE
+    EIGEN_USE_MKL_ALL
+)
+target_link_libraries(xfem PRIVATE MKL::MKL xfem_core)
+
+if(WIN32)
+    set(MKL_ROOT "C:/Program Files (x86)/Intel/oneAPI/mkl/2026.0" CACHE PATH "Intel oneMKL root")
+
+    file(GLOB_RECURSE MKL_RUNTIME_DLLS CONFIGURE_DEPENDS
+        "${MKL_ROOT}/mkl_*.dll"
+    )
+
+    if(MKL_RUNTIME_DLLS)
+        add_custom_command(TARGET xfem POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${MKL_RUNTIME_DLLS}
+                $<TARGET_FILE_DIR:xfem>
+            COMMAND_EXPAND_LISTS
+        )
+    else()
+        message(FATAL_ERROR "MKL runtime DLLs were not found under: ${MKL_ROOT}")
+    endif()
+endif()
 
 add_library(glm STATIC IMPORTED) # or STATIC instead of SHARED
 set_target_properties(glm PROPERTIES

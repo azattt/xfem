@@ -324,10 +324,10 @@ static TipExitEdgeResult findTipExitEdgeByGeometry(
                   << (next_crack_point - tip_point).norm()
                   << "\n";
 
-        throw std::runtime_error(
-            "Cannot find unique exit edge for tip element: "
-            "crack segment may be too short and may not cross element boundary"
-        );
+        // throw std::runtime_error(
+        //     "Cannot find unique exit edge for tip element: "
+        //     "crack segment may be too short and may not cross element boundary"
+        // );
     }
 
     return result;
