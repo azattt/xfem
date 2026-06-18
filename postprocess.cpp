@@ -676,126 +676,206 @@ bool growCrackOneStep(
         return false;
     }
 
-    const TipKResult* best = nullptr;
-    double best_Keq = -1.0;
-
-    for (const TipKResult& r : k_results)
-    {
-        const double Keq = computeEquivalentK(r.K_I, r.K_II);
-
-        if (Keq > best_Keq)
-        {
-            best_Keq = Keq;
-            best = &r;
-        }
-    }
-
-    if (best == nullptr)
-    {
-        return false;
-    }
-
-    std::cout << "Growth check: tip = " << best->tip_index
-              << ", KI = " << best->K_I
-              << ", KII = " << best->K_II
-              << ", Keq = " << best_Keq
-              << ", KIC = " << KIC
-              << std::endl;
-
-    if (best_Keq < KIC)
-    {
-        std::cout << "Crack does not grow: Keq < KIC\n";
-        return false;
-    }
-
     if (crack.vertices.size() < 2 || crack.indices.empty())
     {
         throw std::runtime_error("Crack must contain at least one segment");
     }
 
-    Eigen::Vector2d old_tip;
-    Eigen::Vector2d base_dir;
-
-    if (best->tip_index == 1)
+    struct TipGrowthPlan
     {
-        const CrackSegment& first_segment = crack.indices.front();
+        bool has_result = false;
+        bool should_grow = false;
 
-        old_tip = crack.vertices[first_segment.v0];
+        TipKResult result{};
+        double Keq = -1.0;
+        double theta = 0.0;
 
-        // Для tip 1 направление наружу: от второго узла к первому.
-        base_dir =
-            (crack.vertices[first_segment.v0] -
-             crack.vertices[first_segment.v1]).normalized();
+        Eigen::Vector2d old_tip;
+        Eigen::Vector2d base_dir;
+        Eigen::Vector2d growth_dir;
+        Eigen::Vector2d new_tip;
+
+        int old_tip_vertex_index = -1;
+    };
+
+    TipGrowthPlan tip1;
+    TipGrowthPlan tip2;
+
+    auto updateBestResultForTip =
+        [&](TipGrowthPlan& plan, const TipKResult& r)
+    {
+        const double Keq = computeEquivalentK(r.K_I, r.K_II);
+
+        if (!plan.has_result || Keq > plan.Keq)
+        {
+            plan.has_result = true;
+            plan.result = r;
+            plan.Keq = Keq;
+        }
+    };
+
+    // Собираем лучший результат отдельно для tip 1 и tip 2.
+    for (const TipKResult& r : k_results)
+    {
+        if (r.tip_index == 1)
+        {
+            updateBestResultForTip(tip1, r);
+        }
+        else if (r.tip_index == 2)
+        {
+            updateBestResultForTip(tip2, r);
+        }
+        else
+        {
+            std::cout << "Warning: invalid tip_index = "
+                      << r.tip_index << ". Ignored.\n";
+        }
     }
-    else if (best->tip_index == 2)
+
+    const CrackSegment first_segment = crack.indices.front();
+    const CrackSegment last_segment = crack.indices.back();
+
+    auto prepareGrowthForTip =
+        [&](TipGrowthPlan& plan, int tip_index)
     {
-        const CrackSegment& last_segment = crack.indices.back();
+        if (!plan.has_result)
+        {
+            std::cout << "No K result for tip " << tip_index << ".\n";
+            return;
+        }
 
-        old_tip = crack.vertices[last_segment.v1];
+        std::cout << "Growth check: tip = " << tip_index
+                  << ", KI = " << plan.result.K_I
+                  << ", KII = " << plan.result.K_II
+                  << ", Keq = " << plan.Keq
+                  << ", KIC = " << KIC
+                  << std::endl;
 
-        // Для tip 2 направление наружу: от предпоследней точки к последней.
-        base_dir =
-            (crack.vertices[last_segment.v1] -
-             crack.vertices[last_segment.v0]).normalized();
+        if (plan.Keq < KIC)
+        {
+            std::cout << "Tip " << tip_index
+                      << " does not grow: Keq < KIC\n";
+            return;
+        }
+
+        if (tip_index == 1)
+        {
+            plan.old_tip_vertex_index = first_segment.v0;
+            plan.old_tip = crack.vertices[first_segment.v0];
+
+            // Для tip 1 наружное направление: от второго узла к первому.
+            plan.base_dir =
+                crack.vertices[first_segment.v0] -
+                crack.vertices[first_segment.v1];
+        }
+        else if (tip_index == 2)
+        {
+            plan.old_tip_vertex_index = last_segment.v1;
+            plan.old_tip = crack.vertices[last_segment.v1];
+
+            // Для tip 2 наружное направление: от предпоследней точки к последней.
+            plan.base_dir =
+                crack.vertices[last_segment.v1] -
+                crack.vertices[last_segment.v0];
+        }
+        else
+        {
+            throw std::runtime_error("Invalid tip_index in prepareGrowthForTip");
+        }
+
+        if (plan.base_dir.norm() == 0.0)
+        {
+            throw std::runtime_error("Zero crack segment length near tip");
+        }
+
+        plan.base_dir.normalize();
+
+        plan.theta = computeCrackGrowthAngle(
+            plan.result.K_I,
+            plan.result.K_II
+        );
+
+        plan.growth_dir = rotateVector(plan.base_dir, plan.theta);
+
+        if (plan.growth_dir.norm() == 0.0)
+        {
+            throw std::runtime_error("Zero growth direction");
+        }
+
+        plan.growth_dir.normalize();
+
+        plan.new_tip = plan.old_tip + da * plan.growth_dir;
+
+        // Если захочешь снова включить ограничение области:
+        /*
+        if (!pointInsideDomain(plan.new_tip, domain_w, domain_h))
+        {
+            std::cout << "Tip " << tip_index
+                      << " growth stopped: new tip is outside domain. "
+                      << "new_tip = " << plan.new_tip.transpose() << "\n";
+            return;
+        }
+        */
+
+        plan.should_grow = true;
+    };
+
+    // Важно: сначала только считаем оба новых конца.
+    // Пока crack.vertices и crack.indices не меняем.
+    prepareGrowthForTip(tip1, 1);
+    prepareGrowthForTip(tip2, 2);
+
+    if (!tip1.should_grow && !tip2.should_grow)
+    {
+        std::cout << "Crack does not grow at any tip.\n";
+        return false;
     }
-    else
+
+    // Теперь применяем рост tip 1.
+    if (tip1.should_grow)
     {
-        throw std::runtime_error("Invalid tip_index in growCrackOneStep");
-    }
-
-    const double theta = computeCrackGrowthAngle(best->K_I, best->K_II);
-
-    Eigen::Vector2d growth_dir = rotateVector(base_dir, theta).normalized();
-
-    Eigen::Vector2d new_tip = old_tip + da * growth_dir;
-
-    // if (!pointInsideDomain(new_tip, domain_w, domain_h))
-    // {
-    //     std::cout << "Crack growth stopped: new tip is outside domain. "
-    //               << "new_tip = " << new_tip.transpose() << "\n";
-    //     return false;
-    // }
-
-    if (best->tip_index == 1)
-    {
-        const int old_first_index = crack.indices.front().v0;
-
         const int new_index =
             static_cast<int>(crack.vertices.size());
 
-        crack.vertices.push_back(new_tip);
+        crack.vertices.push_back(tip1.new_tip);
 
         // Новый сегмент: new_tip -> old_tip.
         // Он становится первым сегментом трещины.
         crack.indices.insert(
             crack.indices.begin(),
-            CrackSegment{new_index, old_first_index}
+            CrackSegment{new_index, tip1.old_tip_vertex_index}
         );
-    }
-    else
-    {
-        const int old_last_index = crack.indices.back().v1;
 
+        std::cout << "Crack grown at tip 1"
+                  << ", theta = " << tip1.theta
+                  << ", old_tip = " << tip1.old_tip.transpose()
+                  << ", new_tip = " << tip1.new_tip.transpose()
+                  << std::endl;
+    }
+
+    // Теперь применяем рост tip 2.
+    if (tip2.should_grow)
+    {
         const int new_index =
             static_cast<int>(crack.vertices.size());
 
-        crack.vertices.push_back(new_tip);
+        crack.vertices.push_back(tip2.new_tip);
 
         // Новый сегмент: old_tip -> new_tip.
+        // Он становится последним сегментом трещины.
         crack.indices.push_back(
-            CrackSegment{old_last_index, new_index}
+            CrackSegment{tip2.old_tip_vertex_index, new_index}
         );
-    }
 
-    std::cout << "Crack grown at tip " << best->tip_index
-              << ", theta = " << theta
-              << ", old_tip = " << old_tip.transpose()
-              << ", new_tip = " << new_tip.transpose()
-              << std::endl;
+        std::cout << "Crack grown at tip 2"
+                  << ", theta = " << tip2.theta
+                  << ", old_tip = " << tip2.old_tip.transpose()
+                  << ", new_tip = " << tip2.new_tip.transpose()
+                  << std::endl;
+    }
 
     return true;
 }
-
 template <unsigned int NGauss>
 std::vector<TipKResult> computeStress(const std::vector<TipEnriched> &tip_enriched,
                    const std::vector<HeavisideEnriched> &heaviside_enriched, const QuadMesh &mesh,

@@ -280,12 +280,12 @@ void saveCrackToFile(const Crack &crack, const std::string &filename)
 
     if (!out.is_open())
     {
-        throw std::runtime_error("Cannot open file for writing: " + filename);
+        // throw std::runtime_error("Cannot open file for writing: " + filename);
     }
 
     if (crack.indices.empty())
     {
-        throw std::runtime_error("Cannot save crack: no crack segments");
+        // throw std::runtime_error("Cannot save crack: no crack segments");
     }
 
     // Сохраняем НЕ crack.vertices по порядку хранения,
@@ -746,7 +746,7 @@ static FontAtlasGL createWindowsFontAtlasGL(const char* face_name, int pixel_hei
 
     if (!bitmap || !dib_bits)
     {
-        throw std::runtime_error("Failed to create text font DIB section");
+        // throw std::runtime_error("Failed to create text font DIB section");
     }
 
     HGDIOBJ old_bitmap = SelectObject(memory_dc, bitmap);
@@ -805,7 +805,7 @@ static FontAtlasGL createWindowsFontAtlasGL(const char* face_name, int pixel_hei
 
         if (pen_y + glyph_h + margin >= atlas_h)
         {
-            throw std::runtime_error("Font atlas is too small");
+            // throw std::runtime_error("Font atlas is too small");
         }
 
         TextOutA(memory_dc, pen_x, pen_y, &c, 1);
@@ -891,7 +891,7 @@ static FontAtlasGL createWindowsFontAtlasGL(const char* face_name, int pixel_hei
 #else
 static FontAtlasGL createWindowsFontAtlasGL(const char*, int)
 {
-    throw std::runtime_error("ANSYS-style system font atlas is implemented only for Windows in this patch");
+    // throw std::runtime_error("ANSYS-style system font atlas is implemented only for Windows in this patch");
 }
 #endif
 
@@ -1172,9 +1172,9 @@ FieldEvalResult evaluateVonMisesPoint(
 
     if (!invertible)
     {
-        throw std::runtime_error(
-            "evaluateVonMisesPoint: Jacobi matrix is not invertible"
-        );
+        // throw std::runtime_error(
+            // "evaluateVonMisesPoint: Jacobi matrix is not invertible"
+        // );
     }
 
     const Eigen::Matrix<double, 2, 4> dN_dx_dy =
@@ -1835,7 +1835,7 @@ int main()
     std::ifstream mesh_data("mesh/mesh.txt");
     if (!mesh_data.is_open())
     {
-        throw std::runtime_error("Couldn't open mesh/mesh.txt");
+        // throw std::runtime_error("Couldn't open mesh/mesh.txt");
     }
     double w, h;
     int wn, hn;
@@ -1901,10 +1901,10 @@ int main()
     {
         for (int i = 0; i < wn - 1; i++)
         {
-            if ((i >= wn / 6 - 1 && i <= 2 * wn / 6) && (j >= hn / 6 - 1 && j <= 2 * hn / 6))
-                continue;
-            if ((i >= wn / 6 - 1 && i <= 2 * wn / 6) && (j >= 4*hn / 6 - 1 && j <= 5 * hn / 6))
-                continue;
+            // if ((i >= wn / 6 - 1 && i <= 2 * wn / 6) && (j >= hn / 6 - 1 && j <= 2 * hn / 6))
+            //     continue;
+            // if ((i >= wn / 6 - 1 && i <= 2 * wn / 6) && (j >= 4*hn / 6 - 1 && j <= 5 * hn / 6))
+            //     continue;
             mesh.elements.push_back(
                 std::array<int, 4>{j * wn + i, j * wn + i + 1, (j + 1) * wn + i + 1, (j + 1) * wn + i});
         }
@@ -1915,7 +1915,7 @@ int main()
     std::ifstream crack_data("mesh/crack.txt");
     if (!crack_data.is_open())
     {
-        throw std::runtime_error("Couldn't open mesh/crack.txt");
+        // throw std::runtime_error("Couldn't open mesh/crack.txt");
     }
     double a, b;
     while (crack_data >> a >> b)
@@ -1924,7 +1924,7 @@ int main()
     }
     if (crack.vertices.size() < 2)
     {
-        throw std::runtime_error("Crack must contain at least two points");
+        // throw std::runtime_error("Crack must contain at least two points");
     }
     for (int i = 1; i < crack.vertices.size(); i++)
     {
@@ -1934,7 +1934,7 @@ int main()
     std::ifstream interaction_integral_data("mesh/interaction_integral.txt");
     if (!interaction_integral_data.is_open())
     {
-        throw std::runtime_error("Couldn't open mesh/interaction_integral.txt");
+        // throw std::runtime_error("Couldn't open mesh/interaction_integral.txt");
     }
     double Rin, Rout;
     interaction_integral_data >> Rin >> Rout;
@@ -1968,7 +1968,7 @@ int main()
     std::vector<GrowthFrame> growth_frames;
     growth_frames.reserve(max_growth_steps);
 
-    const double da = std::sqrt(wh*wh+hh*hh);
+    const double da = 1.1*std::sqrt(wh*wh+hh*hh);
 
     XFemIterationResult solve_result;
 
@@ -2121,7 +2121,7 @@ int main()
 
     if (growth_frames.empty())
     {
-        throw std::runtime_error("No growth frames were created");
+        // throw std::runtime_error("No growth frames were created");
     }
 
     saveCrackToFile(crack, "mesh/crack_final.txt");

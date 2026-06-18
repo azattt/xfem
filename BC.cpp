@@ -183,3 +183,106 @@ void applyBC(
 //     fixedDofs.push_back(off);
 //     fixedValues.push_back(0.0);
 // }
+
+// double cantilever
+
+// void applyBC(
+//     double w,
+//     double h,
+//     int wn,
+//     int hn,
+//     double thickness,
+//     Eigen::VectorXd& P,
+//     const std::vector<unsigned int>& node_offset,
+//     std::vector<int>& fixedDofs,
+//     std::vector<double>& fixedValues
+// )
+// {
+//     const double sigma = 100000.0;       // распределённая нагрузка
+//     const double load_length = 2;     // длина участка нагрузки от правого конца
+
+//     const double dx = w / static_cast<double>(wn - 1);
+
+//     int off;
+
+//     // ============================================================
+//     // 1. Заделка левой границы x = 0
+//     // ============================================================
+//     for (int j = 0; j < hn; ++j)
+//     {
+//         const int node = j * wn; // i = 0, то есть x = 0
+
+//         off = node_offset[node];
+
+//         // UX = 0
+//         fixedDofs.push_back(off);
+//         fixedValues.push_back(0.0);
+
+//         // UY = 0
+//         fixedDofs.push_back(off + 1);
+//         fixedValues.push_back(0.0);
+//     }
+
+//     // ============================================================
+//     // 2. Распределённая нагрузка на участке [w - 0.5, w]
+//     // ============================================================
+//     const double x_load_start = w - load_length;
+//     const double x_load_end = w;
+
+//     // Проходим по граничным отрезкам верхней и нижней граней.
+//     // Это точнее, чем просто выбирать узлы, потому что нагрузка может
+//     // начинаться не ровно в узле сетки.
+//     for (int i = 0; i < wn - 1; ++i)
+//     {
+//         const double x0 = i * dx;
+//         const double x1 = (i + 1) * dx;
+
+//         // Пересечение текущего отрезка [x0, x1]
+//         // с участком нагрузки [w - 0.5, w].
+//         const double a = std::max(x0, x_load_start);
+//         const double b = std::min(x1, x_load_end);
+
+//         if (b <= a)
+//         {
+//             continue;
+//         }
+
+//         const double loaded_segment_length = b - a;
+
+//         // Эквивалентная узловая сила от равномерной нагрузки
+//         // на часть граничного отрезка.
+//         const double f_node =
+//             sigma * thickness * loaded_segment_length / 2.0;
+
+//         // -----------------------------
+//         // Верхняя грань: y = h
+//         // -----------------------------
+//         const int top_node_0 = (hn - 1) * wn + i;
+//         const int top_node_1 = (hn - 1) * wn + (i + 1);
+
+//         off = node_offset[top_node_0];
+//         P(off + 1) += f_node; // вверх
+
+//         off = node_offset[top_node_1];
+//         P(off + 1) += f_node; // вверх
+
+//         // -----------------------------
+//         // Нижняя грань: y = 0
+//         // -----------------------------
+//         const int bottom_node_0 = i;
+//         const int bottom_node_1 = i + 1;
+
+//         off = node_offset[bottom_node_0];
+//         P(off + 1) -= f_node; // вниз
+
+//         off = node_offset[bottom_node_1];
+//         P(off + 1) -= f_node; // вниз
+//     }
+
+//     std::cout << "DCB boundary conditions applied:\n";
+//     std::cout << "Fixed edge: x = 0\n";
+//     std::cout << "Distributed opening load from x = "
+//               << x_load_start << " to x = " << x_load_end << "\n";
+//     std::cout << "Top edge: +Y load\n";
+//     std::cout << "Bottom edge: -Y load\n";
+// }

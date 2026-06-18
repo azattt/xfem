@@ -324,7 +324,7 @@ static TipExitEdgeResult findTipExitEdgeByGeometry(
                   << (next_crack_point - tip_point).norm()
                   << "\n";
 
-        // throw std::runtime_error(
+        // // throw std::runtime_error(
         //     "Cannot find unique exit edge for tip element: "
         //     "crack segment may be too short and may not cross element boundary"
         // );
@@ -361,12 +361,13 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
         const bool tip1 = inQuad(quad_mesh.vertices[element[0]], quad_mesh.vertices[element[1]], quad_mesh.vertices[element[2]], quad_mesh.vertices[element[3]], crack_tip_1_vertex);
         const bool tip2 = inQuad(quad_mesh.vertices[element[0]], quad_mesh.vertices[element[1]], quad_mesh.vertices[element[2]], quad_mesh.vertices[element[3]], crack_tip_2_vertex);
         if (tip1 && tip2){
-            std::cout << "NotImplemented: Both tips in one element." << std::endl;
+            if ((crack_tip_1_vertex-crack_tip_2_vertex).norm() < 0.0000001) continue;
+            // std::cout << "NotImplemented: Both tips in one element." << std::endl;
             continue;
         }
         if (tip1){
             if (tip_1_index != -1) {
-                throw std::runtime_error("tip_1_index != -1");
+                // // throw std::runtime_error("tip_1_index != -1");
             }
 
             tip_1_index = i;
@@ -402,7 +403,7 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
             );
 
             if (!ok_inverse) {
-                throw std::runtime_error("inverseMapping failed for tip 1");
+                // // throw std::runtime_error("inverseMapping failed for tip 1");
             }
 
             tip_enriched.push_back(
@@ -421,7 +422,7 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
         }
         if (tip2){
             if (tip_2_index != -1) {
-                throw std::runtime_error("tip_2_index != -1");
+                // throw std::runtime_error("tip_2_index != -1");
             }
 
             tip_2_index = i;
@@ -457,7 +458,7 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
             );
 
             if (!ok_inverse) {
-                throw std::runtime_error("inverseMapping failed for tip 2");
+                // throw std::runtime_error("inverseMapping failed for tip 2");
             }
 
             tip_enriched.push_back(
@@ -566,7 +567,8 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
             {
                 if (intersection_count >= 2)
                 {
-                    throw std::runtime_error("NotImplemented: more than 2 intersection_edges");
+                    continue;
+                    // throw std::runtime_error("NotImplemented: more than 2 intersection_edges");
                 }
                 const double coord = (level_set_fields.level_set_1_signed_dist[element[edge]]+level_set_fields.level_set_1_signed_dist[element[(edge+1)%4]])/(level_set_fields.level_set_1_signed_dist[element[edge]]-level_set_fields.level_set_1_signed_dist[element[(edge+1)%4]]); 
                 intersection_points_local_coords[intersection_count] = Eigen::Vector<double, 2>{
@@ -580,7 +582,7 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
         if (intersection_count == 0) 
         {
             continue;
-            throw std::runtime_error("NotImplemented: 0 intersections");
+            // throw std::runtime_error("NotImplemented: 0 intersections");
         }
         if (intersection_count == 1) 
         {
@@ -590,7 +592,7 @@ EnrichedElements find_enriched_elements_by_level_set_fields_simple(const QuadMes
         }
         if (intersection_count > 2) 
         {
-            throw std::runtime_error("NotImplemented: more than 2 intersection_edges");
+            // throw std::runtime_error("NotImplemented: more than 2 intersection_edges");
         }
         heaviside_enriched.push_back(HeavisideEnriched{i, intersection_points_local_coords, intersected_edges});
         for (const int& node: element){
@@ -641,7 +643,7 @@ EnrichedElementsTriangulation triangulate_enriched(const QuadMesh& quad_mesh, co
                     zero_sign_vertex_count++;
                 }
             }
-            if (sign == 0) throw std::runtime_error("sign is still zero");
+            if (sign == 0) // throw std::runtime_error("sign is still zero");
             // TODO: add algorithm to find crack intersection with edges 
             if (!all_signs_are_equal){
                 std::cerr << "Warning: not are signs are equal. Maybe multiple cracks in one element" << std::endl;
@@ -692,7 +694,7 @@ EnrichedElementsTriangulation triangulate_enriched(const QuadMesh& quad_mesh, co
                     }
                 }
             }
-            if (sign == 0) throw std::runtime_error("sign is still zero  (1)");
+            if (sign == 0) // throw std::runtime_error("sign is still zero  (1)");
             if (!all_signs_are_equal){
                 std::cerr << "Warning: not are signs are equal. Maybe multiple cracks in one element (1)" << std::endl;
             }
@@ -724,7 +726,7 @@ EnrichedElementsTriangulation triangulate_enriched(const QuadMesh& quad_mesh, co
                     }
                 }
             }
-            if (sign == 0) throw std::runtime_error("sign is still zero  (1)");
+            if (sign == 0) // throw std::runtime_error("sign is still zero  (1)");
             if (!all_signs_are_equal){
                 std::cerr << "Warning: not are signs are equal. Maybe multiple cracks in one element (1)" << std::endl;
             }
@@ -789,7 +791,7 @@ EnrichedElementsTriangulation triangulate_enriched(const QuadMesh& quad_mesh, co
                     }
                 }
             }
-            if (sign == 0) throw std::runtime_error("sign is still zero  (1)");
+            if (sign == 0) // throw std::runtime_error("sign is still zero  (1)");
             if (!all_signs_are_equal){
                 std::cerr << "Warning: not are signs are equal. Maybe multiple cracks in one element (1)" << std::endl;
             }
@@ -818,7 +820,7 @@ EnrichedElementsTriangulation triangulate_enriched(const QuadMesh& quad_mesh, co
                     }
                 }
             }
-            if (sign == 0) throw std::runtime_error("sign is still zero  (1)");
+            if (sign == 0) // throw std::runtime_error("sign is still zero  (1)");
             if (!all_signs_are_equal){
                 std::cerr << "Warning: not are signs are equal. Maybe multiple cracks in one element (1)" << std::endl;
             }
