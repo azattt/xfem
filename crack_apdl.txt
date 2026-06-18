@@ -10,7 +10,7 @@ KEYOPT,1,3,3
 *SET,a,0.3  
 *SET,W,1
 *SET,sigma,10000 
-*SET,mesh_size,0.01
+*SET,mesh_size,0.1
 *SET,t,0.1
 !*****************
 MPTEMP,,,,,,,,  
@@ -32,7 +32,7 @@ L,4,5
 L,5,1
 AL,1,2,3,4,5  
 
-KSCON, 2, a/100, 1, 12, 0.5
+! KSCON, 2, a/100, 1, 12, 0.5
 !*****************
 !* Boundary conditions
 DL,2,,UY,0

@@ -1514,7 +1514,7 @@ int main()
                              toGlm(vertices_displaced[element[1]].cast<float>().eval()),
                              toGlm(vertices_displaced[element[2]].cast<float>().eval()),
                              toGlm(vertices_displaced[element[3]].cast<float>().eval()),
-                             packColor(glm::vec4(1.0f, 0.0f, 0.0f, 1.0f))});
+                             packColor(glm::vec4(0.78f, 0.96f, 0.96f, 1.00f))});
     }
 
     drawHeavisideElements(
@@ -1532,15 +1532,15 @@ int main()
                       crack_tip_2_n, D, 2 * std::pow(10, 11), 0.3, Rin, Rout);
 
     unsigned int idx;
-    for (int i = 0; i < wn; i++)
-    {
-        for (int j = 0; j < hn; j++)
-        {
-            idx = j * wn + i;
-            circles.push_back(Circle{glm::vec3{toGlm(vertices_displaced[idx].cast<float>().eval()), 1.0f / SCR_WIDTH},
-                                     glm::vec4{0.0f, 1.0f, 0.0f, 1.0f}});
-        }
-    }
+    // for (int i = 0; i < wn; i++)
+    // {
+    //     for (int j = 0; j < hn; j++)
+    //     {
+    //         idx = j * wn + i;
+    //         circles.push_back(Circle{glm::vec3{toGlm(vertices_displaced[idx].cast<float>().eval()), 1.0f / SCR_WIDTH},
+    //                                  glm::vec4{0.0f, 1.0f, 0.0f, 1.0f}});
+    //     }
+    // }
     // stress
     std::vector<Eigen::Vector3d> nodalStress(mesh.vertices.size(), Eigen::Vector3d::Zero());
     std::vector<int> nodalCount(mesh.vertices.size(), 0);
@@ -1751,6 +1751,7 @@ int main()
 
         /* Render here */
         glClear(GL_COLOR_BUFFER_BIT);
+        glClearColor(1.00f, 1.00f, 1.00f, 1.00f);
         glm::mat4 projection =
             glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
         xfem_shader.use();
